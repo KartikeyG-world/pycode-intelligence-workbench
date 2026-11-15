@@ -27,6 +27,13 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --strict-markers"
+faulthandler_timeout = 30
+faulthandler_exit_on_timeout = true
+filterwarnings = [
+    "ignore:.*httpx.*:DeprecationWarning",
+    "ignore:.*testclient.*:DeprecationWarning",
+    "ignore:.*httpx.*:",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

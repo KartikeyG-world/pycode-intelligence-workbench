@@ -2,10 +2,8 @@ import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 
-client = TestClient(app)
 
-
-def test_health_endpoint():
+def test_health_endpoint(client: TestClient):
     response = client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
@@ -13,7 +11,7 @@ def test_health_endpoint():
     assert "database" in data
 
 
-def test_analyze_valid_code():
+def test_analyze_valid_code(client: TestClient):
     payload = {
         "title": "Pair Finder",
         "code": """def find_pairs(arr):
@@ -35,7 +33,7 @@ def test_analyze_valid_code():
     assert len(data["graph"]["growth_points"]) > 0
 
 
-def test_analyze_syntax_error():
+def test_analyze_syntax_error(client: TestClient):
     payload = {
         "title": "Syntax Bug",
         "code": "def foo(\n   print('missing parenthesis'"
@@ -48,7 +46,7 @@ def test_analyze_syntax_error():
     assert data["error"]["line"] >= 1
 
 
-def test_analyze_empty_code():
+def test_analyze_empty_code(client: TestClient):
     payload = {
         "title": "Empty Code",
         "code": "   "
@@ -57,7 +55,7 @@ def test_analyze_empty_code():
     assert response.status_code == 400
 
 
-def test_history_endpoint():
+def test_history_endpoint(client: TestClient):
     response = client.get("/api/history")
     assert response.status_code == 200
     assert isinstance(response.json(), list)

@@ -176,6 +176,35 @@ class CostComposer:
             loop_class, loop_reason_str = self._evaluate_loops_with_calls(func_id, loops, cost, op_report)
             if loop_reason_str:
                 loop_reasons.append(loop_reason_str)
+        else:
+            # Check calls enclosed in comprehension loops even without ast.For/While
+            for site in self.call_graph.call_sites:
+                if site.caller_id == func_id and site.is_in_loop:
+                    c_cost, is_complete, reason = self._resolve_call_site_cost(site)
+                    if not is_complete:
+                        cost.unresolved_calls.append(site)
+                        cost.confidence = "LOW"
+                        cost.cost_model_complete = False
+                        cost.analysis_complete = False
+                        cost.analysis_status = "PARTIAL"
+                        cost.limitations.append(f"Enclosed loop call: {reason}")
+                    else:
+                        if c_cost > ComplexityClass.constant():
+                            loop_depth = max(1, site.loop_depth)
+                            multiplier = ComplexityClass.polynomial(float(loop_depth))
+                            is_independent = any(ac.get("category") == "INDEPENDENT_INPUT_SIZE" for ac in site.arg_classifications)
+                            if is_independent and c_cost.category == "linear":
+                                scaled_cost = ComplexityClass.multi_variable("n*m")
+                            else:
+                                scaled_cost = ComplexityClass.multiply(multiplier, c_cost)
+                            loop_class = ComplexityClass.dominant_of(loop_class, scaled_cost)
+                            cost.detected_patterns.append(
+                                f"Comprehension loop on line {site.lineno} invokes helper '{site.callee_name}' ({c_cost.big_o})"
+                            )
+                            loop_reasons.append(
+                                f"Enclosed helper call '{site.callee_name}' ({c_cost.big_o}) inside comprehension of depth {loop_depth} "
+                                f"scales total time to {scaled_cost.big_o}."
+                            )
 
         # 4. Evaluate sequential (non-loop) call costs
         sequential_call_class = ComplexityClass.constant()
@@ -313,11 +342,21 @@ class CostComposer:
         """Detects if results from helper calls inside loops are collected into a persistent data structure."""
         for child in ast.walk(node):
             if isinstance(child, (ast.For, ast.While)):
+                # Track variables assigned from calls inside loop to detect aliased outputs
+                call_assigned_vars: Set[str] = set()
+                for sub in ast.walk(child):
+                    if isinstance(sub, ast.Assign) and isinstance(sub.value, ast.Call):
+                        for t in sub.targets:
+                            if isinstance(t, ast.Name):
+                                call_assigned_vars.add(t.id)
+
                 for sub in ast.walk(child):
                     if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
                         if sub.func.attr in ("append", "extend", "add"):
                             for a in sub.args:
                                 if isinstance(a, ast.Call):
+                                    return True
+                                if isinstance(a, ast.Name) and a.id in call_assigned_vars:
                                     return True
         return False
 
@@ -562,30 +601,163 @@ class CostComposer:
 
         return total_loop_cost, reasoning
 
+    def _evaluate_nested_call_args(
+        self, call_node: Optional[ast.Call]
+    ) -> Tuple[ComplexityClass, bool, str]:
+        """Evaluates computational cost of evaluating argument expressions at call site."""
+        if not call_node or not call_node.args:
+            return ComplexityClass.constant(), True, ""
+
+        max_arg_cost = ComplexityClass.constant()
+        for arg in call_node.args:
+            for child in ast.walk(arg):
+                if isinstance(child, ast.Call):
+                    cname = ""
+                    if isinstance(child.func, ast.Name):
+                        cname = child.func.id
+                    elif isinstance(child.func, ast.Attribute):
+                        cname = child.func.attr
+
+                    # Look up user function
+                    found_cost = None
+                    for fid, fcost in self.computed_costs.items():
+                        if fcost.name == cname and fid != "<module>":
+                            found_cost = fcost.time_complexity
+                            break
+
+                    if found_cost is not None:
+                        max_arg_cost = ComplexityClass.dominant_of(max_arg_cost, found_cost)
+                    elif cname in BUILTIN_COST_MODEL:
+                        max_arg_cost = ComplexityClass.dominant_of(max_arg_cost, BUILTIN_COST_MODEL[cname])
+
+        return max_arg_cost, True, f"Call arguments evaluated in {max_arg_cost.big_o}"
+
+    @staticmethod
+    def _extract_int_constant(node: ast.AST) -> Optional[int]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
+                return -node.operand.value
+        return None
+
     def _resolve_container_method_cost(
         self, call_node: ast.Call, method_name: str
     ) -> Tuple[ComplexityClass, bool, str]:
+        receiver_name = ""
+        if isinstance(call_node.func, ast.Attribute) and isinstance(call_node.func.value, ast.Name):
+            receiver_name = call_node.func.value.id
+
         if method_name == "pop":
             if call_node.args:
-                first = call_node.args[0]
-                if isinstance(first, ast.Constant) and first.value == 0:
-                    return ComplexityClass.linear(), True, "list.pop(0) shifts elements requiring O(n) linear time"
-                elif isinstance(first, ast.Constant) and first.value == -1:
-                    return ComplexityClass.constant(), True, "list.pop(-1) removes last element in O(1) constant time"
-                else:
-                    return ComplexityClass.linear(), True, "list.pop(k) shifts following elements requiring O(n) time"
-            return ComplexityClass.constant(), True, "list.pop() removes last element in O(1) constant time"
+                val = self._extract_int_constant(call_node.args[0])
+                if val == 0:
+                    return ComplexityClass.linear(), True, f"list.pop(0) shifts elements requiring O(n) linear time on '{receiver_name}'"
+                elif val == -1:
+                    return ComplexityClass.constant(), True, f"list.pop(-1) removes last element in O(1) constant time on '{receiver_name}'"
+                elif val is not None and val > 0:
+                    return ComplexityClass.linear(), True, f"list.pop(k) shifts n-k elements requiring O(n-k) time on '{receiver_name}'"
+                return ComplexityClass.linear(), True, f"list.pop(k) shifts following elements requiring O(n-k) time on '{receiver_name}'"
+            return ComplexityClass.constant(), True, f"list.pop() removes last element in O(1) amortized time on '{receiver_name}'"
 
         if method_name == "insert":
-            return ComplexityClass.linear(), True, "list.insert() shifts subsequent elements requiring O(n) time"
+            if call_node.args:
+                idx = self._extract_int_constant(call_node.args[0])
+                if idx == 0:
+                    return ComplexityClass.linear(), True, f"list.insert(0, ...) shifts elements requiring O(n) time on '{receiver_name}'"
+                elif idx == -1:
+                    return ComplexityClass.constant(), True, f"list.insert(-1, ...) appends to end in O(1) amortized time on '{receiver_name}'"
+                elif idx is not None:
+                    return ComplexityClass.linear(), True, f"list.insert(k, ...) shifts n-k elements in O(n-k) time on '{receiver_name}'"
+            return ComplexityClass.linear(), True, f"list.insert() shifts subsequent elements requiring O(n) time on '{receiver_name}'"
 
         if method_name in ("extend", "copy", "remove", "count", "index", "update"):
-            return ComplexityClass.linear(), True, f"Container method '{method_name}' traverses elements in O(n) time"
+            return ComplexityClass.linear(), True, f"Container method '{method_name}' traverses elements in O(n) time on '{receiver_name}' (assuming standard built-in type)"
 
         if method_name in ("append", "add", "discard", "clear", "get", "keys", "values", "items"):
-            return ComplexityClass.constant(), True, f"Container method '{method_name}' executes in O(1) amortized/average time"
+            return ComplexityClass.constant(), True, f"Container method '{method_name}' executes in O(1) amortized/average time on '{receiver_name}' (assuming standard hash/array distribution)"
 
-        return ComplexityClass.constant(), False, f"Unknown method '{method_name}'"
+        return ComplexityClass.constant(), False, f"Unknown method '{method_name}' on '{receiver_name}'"
+
+    def _resolve_builtin_function_cost(
+        self, site: CallSite
+    ) -> Tuple[ComplexityClass, bool, str]:
+        """Resolves built-in function calls under explicit, documented assumptions."""
+        fname = site.callee_name
+        call = site.call_node
+
+        if fname == "print":
+            has_container_arg = False
+            if call and call.args:
+                for arg in call.args:
+                    if isinstance(arg, (ast.List, ast.Dict, ast.Set, ast.Tuple, ast.ListComp)):
+                        has_container_arg = True
+                    elif isinstance(arg, ast.Name):
+                        if any(kw in arg.id.lower() for kw in ("arr", "list", "items", "matrix", "grid", "data")):
+                            has_container_arg = True
+            if has_container_arg:
+                return ComplexityClass.linear(), True, "print() formatting and stream write proportional to container size O(n)"
+            return ComplexityClass.constant(), True, "print() with scalar/constant arguments evaluates in O(1)"
+
+        if fname == "len":
+            return ComplexityClass.constant(), True, "len() on established built-in sized container is O(1) (assuming standard __len__)"
+
+        if fname == "range":
+            return ComplexityClass.constant(), True, "range() constructor returns iterator object in O(1) time and space"
+
+        if fname in ("min", "max", "sum"):
+            if call and call.args:
+                arg = call.args[0]
+                if isinstance(arg, (ast.GeneratorExp, ast.ListComp)):
+                    elt_cost = ComplexityClass.constant()
+                    for n in ast.walk(arg.elt):
+                        if isinstance(n, ast.Call):
+                            cname = n.func.id if isinstance(n.func, ast.Name) else (n.func.attr if isinstance(n.func, ast.Attribute) else "")
+                            for fid, fcost in self.computed_costs.items():
+                                if fcost.name == cname and fid != "<module>":
+                                    elt_cost = ComplexityClass.dominant_of(elt_cost, fcost.time_complexity)
+                    if elt_cost > ComplexityClass.constant():
+                        total_cost = ComplexityClass.multiply(ComplexityClass.linear(), elt_cost)
+                        return total_cost, True, f"{fname}() consuming generator yielding '{elt_cost.big_o}' elements in {total_cost.big_o}"
+                    return ComplexityClass.linear(), True, f"{fname}() consuming comprehension/generator iterable in O(n)"
+                if isinstance(arg, ast.Call):
+                    nested_cname = arg.func.id if isinstance(arg.func, ast.Name) else "nested"
+                    found_cost = None
+                    for fid, fcost in self.computed_costs.items():
+                        if fcost.name == nested_cname and fid != "<module>":
+                            found_cost = fcost.time_complexity
+                            break
+                    if found_cost:
+                        return ComplexityClass.dominant_of(ComplexityClass.linear(), found_cost), True, f"{fname}() over '{nested_cname}()' result"
+            return ComplexityClass.linear(), True, f"Built-in '{fname}()' iterates over collection in O(n) time"
+
+        if fname == "sorted":
+            key_kw = None
+            if call:
+                for kw in call.keywords:
+                    if kw.arg == "key":
+                        key_kw = kw.value
+            if key_kw is not None:
+                key_name = ast.unparse(key_kw) if hasattr(ast, "unparse") else "key"
+                if isinstance(key_kw, ast.Name):
+                    found_cost = None
+                    for fid, fcost in self.computed_costs.items():
+                        if fcost.name == key_kw.id and fid != "<module>":
+                            found_cost = fcost.time_complexity
+                            break
+                    if found_cost:
+                        total = ComplexityClass.dominant_of(ComplexityClass.linearithmic(), ComplexityClass.multiply(ComplexityClass.linear(), found_cost))
+                        return total, True, f"sorted() with key function '{key_name}' ({total.big_o})"
+                    elif key_kw.id in BUILTIN_COST_MODEL:
+                        return ComplexityClass.linearithmic(), True, f"sorted() with built-in key '{key_name}' in O(n log n)"
+                    else:
+                        return ComplexityClass.linearithmic(), False, f"sorted() with unresolved key function '{key_name}'"
+            return ComplexityClass.linearithmic(), True, "sorted() Timsort worst-case O(n log n)"
+
+        if fname in BUILTIN_COST_MODEL:
+            return BUILTIN_COST_MODEL[fname], True, f"Built-in function '{fname}'"
+
+        return ComplexityClass.constant(), False, f"Unknown built-in '{fname}'"
 
     def _resolve_call_site_cost(
         self, site: CallSite
@@ -595,13 +767,21 @@ class CostComposer:
             callee_info = self.index.functions.get(site.callee_id)
 
             # Check generator deferred execution: creating a generator without consuming it is O(1)
+            # BUT its call arguments are evaluated eagerly at call site!
             if callee_info and callee_info.is_generator:
+                arg_work, _, _ = self._evaluate_nested_call_args(site.call_node)
                 if not site.is_consumed_generator:
+                    if arg_work > ComplexityClass.constant():
+                        return arg_work, True, f"Generator '{site.callee_name}' unconsumed (body deferred), but call arguments evaluated in {arg_work.big_o}"
                     return ComplexityClass.constant(), True, f"Generator '{site.callee_name}' instantiated in O(1) without consumption (body execution deferred)"
 
             # Check coroutine unawaited creation: creating a coroutine object without awaiting it is O(1)
+            # BUT its call arguments are evaluated eagerly at call site!
             if callee_info and callee_info.is_async:
+                arg_work, _, _ = self._evaluate_nested_call_args(site.call_node)
                 if not site.is_awaited:
+                    if arg_work > ComplexityClass.constant():
+                        return arg_work, True, f"Coroutine '{site.callee_name}' unawaited (body deferred), but call arguments evaluated in {arg_work.big_o}"
                     return ComplexityClass.constant(), True, f"Coroutine '{site.callee_name}' created in O(1) without await (asynchronous execution deferred)"
 
             # Check if all arguments are static constants
@@ -614,8 +794,8 @@ class CostComposer:
             return ComplexityClass.constant(), True, f"Self or mutual recursive call to '{site.callee_name}'"
 
         # Check known built-in functions
-        if site.callee_name in BUILTIN_COST_MODEL:
-            return BUILTIN_COST_MODEL[site.callee_name], True, f"Built-in function '{site.callee_name}'"
+        if site.callee_name in BUILTIN_OPERATIONS or site.callee_name in BUILTIN_COST_MODEL:
+            return self._resolve_builtin_function_cost(site)
 
         # Check known standard container methods (append, pop, insert, etc.)
         if site.call_node and isinstance(site.call_node.func, ast.Attribute):

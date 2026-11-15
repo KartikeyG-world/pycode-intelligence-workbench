@@ -55,16 +55,18 @@ class RecursionAnalyzer:
         param_names = [arg.arg for arg in func_node.args.args]
         total_call_sites = len(recursive_calls)
 
-        # 2. Check for memoization (e.g. @cache, @lru_cache, or memo[key] dictionary usage)
-        has_memoization, state_space = self._detect_memoization(func_node, param_names)
-
-        # 3. Check if any recursive call is enclosed inside a loop (e.g. for i in range(n): f(n-1))
-        in_loop, loop_bound = self._check_recursion_in_loop(func_node, func_name)
-
-        # 4. Calculate worst-case branching factor along any single execution path
+        # 2. Calculate worst-case branching factor along any single execution path
         worst_case_branches = self._calculate_worst_case_branches(func_node.body, func_name)
         if worst_case_branches == 0:
             worst_case_branches = total_call_sites
+
+        # 3. Check for memoization (e.g. @cache, @lru_cache, or memo[key] dictionary usage)
+        has_memoization, state_space, is_bounded_cache = self._detect_memoization(
+            func_node, param_names, worst_case_branches
+        )
+
+        # 4. Check if any recursive call is enclosed inside a loop (e.g. for i in range(n): f(n-1))
+        in_loop, loop_bound = self._check_recursion_in_loop(func_node, func_name)
 
         # 5. Analyze argument transformations across recursive calls
         reduction_type, step_size = self._analyze_argument_transformations(
@@ -101,6 +103,7 @@ class RecursionAnalyzer:
             leaf_output_work=leaf_output_work,
             retains_all_outputs=retains_all,
             recursion_inside_loop_size=loop_bound,
+            is_bounded_cache=is_bounded_cache,
         )
 
         return rel
@@ -159,19 +162,39 @@ class RecursionAnalyzer:
                         return True, bound
         return False, None
 
-    def _detect_memoization(self, func_node: ast.FunctionDef, param_names: List[str]) -> Tuple[bool, Optional[str]]:
+    def _detect_memoization(
+        self, func_node: ast.FunctionDef, param_names: List[str], worst_case_branches: int = 1
+    ) -> Tuple[bool, Optional[str], bool]:
         # Check decorators: @cache, @lru_cache
         for dec in func_node.decorator_list:
             dec_id = ""
+            maxsize_val: Optional[int] = None
             if isinstance(dec, ast.Name):
                 dec_id = dec.id
-            elif isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name):
-                dec_id = dec.func.id
+            elif isinstance(dec, ast.Call):
+                if isinstance(dec.func, ast.Name):
+                    dec_id = dec.func.id
+                elif isinstance(dec.func, ast.Attribute):
+                    dec_id = dec.func.attr
+                for kw in dec.keywords:
+                    if kw.arg == "maxsize" and isinstance(kw.value, ast.Constant):
+                        maxsize_val = kw.value.value
+                if dec.args and isinstance(dec.args[0], ast.Constant):
+                    maxsize_val = dec.args[0].value
             elif isinstance(dec, ast.Attribute):
                 dec_id = dec.attr
 
             if "cache" in dec_id.lower():
-                return True, f"Θ({'*'.join(param_names[:2])})" if len(param_names) >= 2 else "Θ(n)"
+                # If bounded cache with maxsize <= 1 and branching factor > 1 (e.g. fibonacci):
+                # cache thrashing prevents memoization from reducing exponential branching
+                if "lru" in dec_id.lower() and maxsize_val is not None and maxsize_val <= 1:
+                    if worst_case_branches > 1:
+                        return False, None, True
+                    return True, "Θ(n)", True
+
+                is_bounded = bool("lru" in dec_id.lower() and maxsize_val is not None)
+                state = f"Θ({'*'.join(param_names[:2])})" if len(param_names) >= 2 else "Θ(n)"
+                return True, state, is_bounded
 
         # Check in-body cache access: memo[key], cache[key]
         has_dict_lookup = False
@@ -192,10 +215,10 @@ class RecursionAnalyzer:
 
         if has_dict_lookup and has_dict_store:
             if has_key_tuple and any("cap" in p.lower() or "weight" in p.lower() for p in param_names):
-                return True, "Θ(n*W)"
-            return True, "Θ(n)"
+                return True, "Θ(n*W)", False
+            return True, "Θ(n)", False
 
-        return False, None
+        return False, None, False
 
     def _analyze_argument_transformations(
         self, func_node: ast.FunctionDef, recursive_calls: List[ast.Call], param_names: List[str], worst_case_branches: int = 1

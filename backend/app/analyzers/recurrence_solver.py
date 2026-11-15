@@ -20,6 +20,7 @@ class RecurrenceRelation:
         leaf_output_work: Optional[ComplexityClass] = None,
         retains_all_outputs: bool = False,
         recursion_inside_loop_size: Optional[str] = None,
+        is_bounded_cache: bool = False,
     ):
         self.func_name = func_name
         self.branching_factor = branching_factor
@@ -33,6 +34,7 @@ class RecurrenceRelation:
         self.leaf_output_work = leaf_output_work
         self.retains_all_outputs = retains_all_outputs
         self.recursion_inside_loop_size = recursion_inside_loop_size
+        self.is_bounded_cache = is_bounded_cache
 
         # Output derivation artifacts
         self.is_solved: bool = False
@@ -362,7 +364,10 @@ class RecurrenceSolver:
         state_desc = rel.state_space or f"Θ({var})"
         rel.recurrence_str = f"T({var}) = {rel.branching_factor}T(...) with Memoization/Cache"
         rel.stack_depth_class = ComplexityClass.linear(var)
-        rel.auxiliary_space_class = ComplexityClass.linear(var)
+        if rel.is_bounded_cache:
+            rel.auxiliary_space_class = ComplexityClass.constant()
+        else:
+            rel.auxiliary_space_class = ComplexityClass.linear(var)
 
         if "W" in state_desc:
             # Knapsack with memoization: O(n * W)

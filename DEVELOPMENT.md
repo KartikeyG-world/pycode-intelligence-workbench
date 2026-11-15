@@ -127,17 +127,34 @@ On Windows systems, Python's `asyncio.ProactorEventLoop` uses a TCP loopback soc
 
 ---
 
-## 6. Documented Engine Algorithmic Deficiencies (Phase -1 Audit)
+## 6. Historical Algorithmic Deficiencies (Resolved in Phase 1A & Phase 1A.1)
 
-The following behavioral limitations were verified and cataloged during the Phase -1 baseline audit without altering existing code:
+The following deficiencies cataloged during Phase -1 were systematically resolved in Phase 1A and Phase 1A.1:
 
-1. **Interprocedural Complexity Loss**:
-   Loops invoking external helper functions do not inline helper asymptotic cost, treating caller and callee as sequential blocks ($\mathcal{O}(\max(f(n), g(n)))$) rather than multiplying costs ($\mathcal{O}(f(n) \cdot g(n))$).
-2. **Recursion Loop Preemption**:
-   If any recursive function exists in the submitted AST, the analyzer branches exclusively to `recursions[0]`, ignoring all outer and independent loops in the AST.
-3. **Single Recursion Tracking**:
-   When multiple recursive procedures exist in the module, only `recursions[0]` is evaluated; subsequent recursive functions are ignored.
-4. **Integer Accumulation Flagged as String Concatenation**:
-   Any `+=` binary operation within a loop triggers `has_string_concat_in_loop = True` without type inference, emitting quadratic string copying warnings for integer accumulators (`total += x`).
+1. **Interprocedural Call Graph & Loop Composition**: Resolved via `FunctionIndex`, `CallGraph`, and `CostComposer`. Call sites inside loops multiply caller and callee asymptotic costs ($\mathcal{O}(f(n) \cdot g(n))$).
+2. **Multi-Function & Recursion Composition**: Resolved via Tarjan's SCC decomposition, bottom-up topological evaluation, and additive composition across independent procedures.
+3. **Local Type Inference**: Resolved via `LocalTypeInference`, preventing false string concatenation warnings on numeric and annotated variables.
+4. **Parser Boundaries & Semantic Execution Safety**: Enforced strict input byte/line limits (100 KB, 3,000 lines), iterative bounded AST traversal, container method cost models, and eager argument evaluation.
 
-These deficiencies will be addressed in future analysis engine redesign phases.
+---
+
+## 7. Phase 1B Architectural Specification & Design Boundaries
+
+As the engine advances to Control Flow Graph (CFG) analysis, Cyclomatic Complexity, and path-sensitive analysis in Phase 1B, the following architectural invariants and boundaries must be preserved:
+
+### A. Non-Exact Path Enumeration Boundary
+Control flow analysis must NOT claim or attempt to provide "exact path enumeration" for general Python programs. In the presence of arbitrary loops, recursion, dynamic dispatch, and input-dependent branch conditions, path feasibility and exhaustive execution path enumeration are undecidable (Rice's Theorem / Halting Problem). Instead, the CFG engine computes sound over-approximations, upper-bound path counts, branch condition coverage, and McCabe cyclomatic complexity $M = E - N + 2P$.
+
+### B. Seven-Tier Architecture & Division of Responsibility
+The analysis pipeline adheres to a strict 7-tier layered hierarchy with unidirectional data flow:
+
+1. **AST Layer (`SafeASTParser`)**: Enforces input size boundaries (100 KB / 3,000 lines), AST node limits (50,000 nodes, depth $\le 200$), and parses source into Python standard AST representations without code execution.
+2. **Function Index (`FunctionIndex`)**: Extracts lexical scopes, parameter lists, class/method definitions, decorators, and maps identifiers across scopes.
+3. **Call Graph (`CallGraph`)**: Identifies interprocedural call sites, argument classifications, Tarjan Strongly Connected Components (SCCs), and mutual/direct recursion cycles.
+4. **Control Flow Graph (`CFGBuilder`)**: Constructs basic blocks, control flow edges, entry/exit points, loop headers, and exception handling paths per function scope.
+5. **Recurrence Solver (`RecurrenceSolver` & `RecursionAnalyzer`)**: Solves homogeneous and inhomogeneous recurrence relations extracted from recursive calls.
+6. **Cyclomatic Analyzer (`CyclomaticAnalyzer`)**: Computes McCabe cyclomatic complexity, decision density, and branch counts directly from the CFG block structure.
+7. **Cost Composer (`CostComposer`)**: Synthesizes time complexity, auxiliary/retained space complexity, built-in operation costs, and emits the unified `AnalysisResult` contract.
+
+### C. Radon as Development-Time Validation Oracle
+External cyclomatic complexity tools (e.g., `radon`) are restricted to development-time test harness oracles and validation baselines (`tests/`). They must NOT be imported, linked, or executed as runtime production dependencies in backend code. The production workbench relies exclusively on internal, verified AST/CFG traversal.

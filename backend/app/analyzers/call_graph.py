@@ -2,6 +2,13 @@ import ast
 from typing import Dict, Any, List, Optional, Set, Tuple
 from app.analyzers.function_index import FunctionIndex, FunctionInfo
 
+BUILTIN_CONTAINER_METHODS: Set[str] = {
+    "append", "extend", "pop", "insert", "remove", "clear",
+    "index", "count", "sort", "reverse", "copy",
+    "get", "keys", "values", "items", "update",
+    "add", "discard"
+}
+
 
 class CallSite:
     """Represents a specific function invocation site in the AST."""
@@ -145,15 +152,81 @@ class CallGraph:
                 self.generic_visit(node)
                 loop_stack.pop()
 
-            # Stop walking into nested function or class definitions (they have their own scope)
+            def _visit_comprehension_construct(self, generators: List[ast.comprehension], inner_nodes: List[ast.AST]):
+                pushed = 0
+                try:
+                    for gen in generators:
+                        self.visit(gen.iter)
+                        loop_stack.append(gen)
+                        pushed += 1
+                        self.visit(gen.target)
+                        for if_expr in gen.ifs:
+                            self.visit(if_expr)
+                    for n in inner_nodes:
+                        self.visit(n)
+                finally:
+                    for _ in range(pushed):
+                        loop_stack.pop()
+
+            def visit_GeneratorExp(self, node: ast.GeneratorExp):
+                self._visit_comprehension_construct(node.generators, [node.elt])
+
+            def visit_ListComp(self, node: ast.ListComp):
+                self._visit_comprehension_construct(node.generators, [node.elt])
+
+            def visit_SetComp(self, node: ast.SetComp):
+                self._visit_comprehension_construct(node.generators, [node.elt])
+
+            def visit_DictComp(self, node: ast.DictComp):
+                self._visit_comprehension_construct(node.generators, [node.key, node.value])
+
+            # Decorator expressions and default argument expressions evaluate at definition time in the enclosing scope
             def visit_FunctionDef(self, node: ast.FunctionDef):
-                pass
+                for dec in node.decorator_list:
+                    self.visit(dec)
+                for d in node.args.defaults + [kd for kd in node.args.kw_defaults if kd]:
+                    self.visit(d)
+                # Function body is deferred, so do not visit node.body here
 
             def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
-                pass
+                for dec in node.decorator_list:
+                    self.visit(dec)
+                for d in node.args.defaults + [kd for kd in node.args.kw_defaults if kd]:
+                    self.visit(d)
+                # Async function body is deferred, so do not visit node.body here
 
             def visit_ClassDef(self, node: ast.ClassDef):
                 pass
+
+            def visit_Attribute(self, node: ast.Attribute):
+                # Check if this attribute access is a property getter invocation (not a method call)
+                is_call_func = len(parent_stack) >= 2 and isinstance(parent_stack[-2], ast.Call) and parent_stack[-2].func is node
+                if not is_call_func:
+                    prop_name = node.attr
+                    for fid, finfo in self.outer.index.functions.items():
+                        if finfo.func_type == "property" and finfo.name == prop_name:
+                            is_in_loop = len(loop_stack) > 0
+                            loop_depth = len(loop_stack)
+                            site = CallSite(
+                                caller_id=caller_id,
+                                callee_id=fid,
+                                callee_name=f"{finfo.name}",
+                                lineno=node.lineno,
+                                col_offset=node.col_offset,
+                                is_in_loop=is_in_loop,
+                                loop_depth=loop_depth,
+                                enclosing_loop_id=f"loop@{loop_stack[-1].lineno}" if loop_stack else None,
+                                arg_descriptions=[],
+                                arg_classifications=[],
+                                is_resolved=True,
+                                call_node=None,
+                                is_builtin=False,
+                            )
+                            self.outer.call_sites.append(site)
+                            self.outer.adj_list.setdefault(caller_id, set()).add(fid)
+                            self.outer.reverse_adj_list.setdefault(fid, set()).add(caller_id)
+                            self.outer.index.functions[caller_id].call_sites.append(site)
+                self.generic_visit(node)
 
             def visit_Call(self, node: ast.Call):
                 callee_info, unresolved_reason = self.outer.index.resolve_call(caller_id, node)
@@ -161,20 +234,26 @@ class CallGraph:
 
                 # Check if this call is the iterator expression of the innermost loop
                 is_in_iter_header = False
-                if loop_stack and isinstance(loop_stack[-1], ast.For):
-                    if loop_stack[-1].iter is node or any(n is node for n in ast.walk(loop_stack[-1].iter)):
-                        is_in_iter_header = True
+                if loop_stack:
+                    innermost = loop_stack[-1]
+                    if isinstance(innermost, (ast.For, ast.comprehension)):
+                        if innermost.iter is node or any(n is node for n in ast.walk(innermost.iter)):
+                            is_in_iter_header = True
 
                 effective_loop_stack = loop_stack[:-1] if is_in_iter_header else loop_stack
                 is_in_loop = len(effective_loop_stack) > 0
                 loop_depth = len(effective_loop_stack)
-                enclosing_loop_id = f"loop@{effective_loop_stack[-1].lineno}" if effective_loop_stack else None
+                enclosing_loop_id = (
+                    f"loop@{getattr(effective_loop_stack[-1], 'lineno', node.lineno)}"
+                    if effective_loop_stack
+                    else None
+                )
 
                 # Extract loop iteration variables and bound variables
                 active_loop_vars: Set[str] = set()
                 enclosing_loop_bound_vars: Set[str] = set()
                 for loop in effective_loop_stack:
-                    if isinstance(loop, ast.For):
+                    if isinstance(loop, (ast.For, ast.comprehension)):
                         if isinstance(loop.target, ast.Name):
                             active_loop_vars.add(loop.target.id)
                         elif isinstance(loop.target, ast.Tuple):
@@ -212,7 +291,14 @@ class CallGraph:
                     if isinstance(p, ast.comprehension) and p.iter is node:
                         is_consumed = True
 
-                is_builtin = bool(unresolved_reason and unresolved_reason.startswith("builtin:"))
+                is_builtin = bool(
+                    (unresolved_reason and unresolved_reason.startswith("builtin:"))
+                    or (
+                        unresolved_reason
+                        and unresolved_reason.startswith("dynamic_dispatch:")
+                        and callee_name in BUILTIN_CONTAINER_METHODS
+                    )
+                )
 
                 if callee_info is not None:
                     callee_id = callee_info.func_id

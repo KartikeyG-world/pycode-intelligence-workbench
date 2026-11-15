@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AnalyzeRequest(BaseModel):
@@ -115,10 +115,21 @@ class AnalyzeResponse(BaseModel):
     cost_model_complete: Optional[bool] = None
     analysis_complete: Optional[bool] = None
     analysis_status: Optional[str] = None  # "COMPLETE", "PARTIAL", "UNSUPPORTED", "LEGACY_RECORD"
-    analysis_schema_version: str = "1.1"
+    analysis_schema_version: Optional[str] = None
     unresolved_calls: List[Dict[str, Any]] = Field(default_factory=list)
     unsupported_patterns: List[str] = Field(default_factory=list)
     limitations: List[str] = Field(default_factory=list)
     call_graph: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[SyntaxErrorInfo] = None
     submission_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_legacy_and_status_invariants(self) -> "AnalyzeResponse":
+        if self.analysis_schema_version is None and self.analysis_status is None:
+            self.analysis_status = "LEGACY_RECORD"
+            self.analysis_complete = None
+        elif self.analysis_status == "COMPLETE":
+            self.analysis_complete = True
+        elif self.analysis_status in ("PARTIAL", "UNSUPPORTED"):
+            self.analysis_complete = False
+        return self

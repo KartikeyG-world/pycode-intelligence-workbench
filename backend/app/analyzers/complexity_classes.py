@@ -69,42 +69,46 @@ class ComplexityClass:
         return cls("unsupported", custom_str=f"Unsupported ({reason})", is_tight=False)
 
     @classmethod
-    def from_big_o(cls, notation: str) -> "ComplexityClass":
+    def from_big_o(cls, notation: str, is_tight: Optional[bool] = None) -> "ComplexityClass":
         clean = notation.strip()
+        is_explicit_theta = clean.startswith("Θ(") or clean.startswith("Theta(")
         if clean.startswith("O(") and clean.endswith(")"):
             inner = clean[2:-1].strip()
-        elif clean.startswith("Θ(") and clean.endswith(")"):
-            inner = clean[2:-1].strip()
+            tight = False if is_tight is None else is_tight
+        elif is_explicit_theta and clean.endswith(")"):
+            inner = clean[clean.index("(") + 1 : -1].strip()
+            tight = True if is_tight is None else is_tight
         else:
             inner = clean
+            tight = True if is_tight is None else is_tight
 
         if inner == "1":
-            return cls.constant()
+            return cls("constant", poly_degree=0.0, log_degree=0.0, is_tight=tight)
         if inner in ("log n", "log(n)"):
-            return cls.logarithmic()
+            return cls("logarithmic", poly_degree=0.0, log_degree=1.0, is_tight=tight)
         if inner == "n":
-            return cls.linear()
+            return cls("linear", poly_degree=1.0, is_tight=tight)
         if inner in ("n log n", "n log(n)", "n*log(n)", "n*log n"):
-            return cls.linearithmic()
+            return cls("linearithmic", poly_degree=1.0, log_degree=1.0, is_tight=tight)
         if inner in ("n²", "n^2"):
-            return cls.polynomial(2.0)
+            return cls("polynomial", poly_degree=2.0, is_tight=tight)
         if "log" in inner and ("n²" in inner or "n^2" in inner):
-            return cls("polynomial", poly_degree=2.0, log_degree=1.0)
+            return cls("polynomial", poly_degree=2.0, log_degree=1.0, is_tight=tight)
         if inner in ("n³", "n^3"):
-            return cls.polynomial(3.0)
+            return cls("polynomial", poly_degree=3.0, is_tight=tight)
         if "log" in inner and ("n³" in inner or "n^3" in inner):
-            return cls("polynomial", poly_degree=3.0, log_degree=1.0)
+            return cls("polynomial", poly_degree=3.0, log_degree=1.0, is_tight=tight)
         if inner in ("n⁴", "n^4"):
-            return cls.polynomial(4.0)
+            return cls("polynomial", poly_degree=4.0, is_tight=tight)
         if inner in ("2^n", "2ⁿ"):
-            return cls.exponential(2.0)
+            return cls("exponential", exp_base=2.0, is_tight=tight)
         if inner in ("3^n", "3ⁿ"):
-            return cls.exponential(3.0)
+            return cls("exponential", exp_base=3.0, is_tight=tight)
         if inner in ("n!",):
-            return cls.factorial()
+            return cls("factorial", is_tight=tight)
         if "Unsupported" in inner:
             return cls.unsupported()
-        return cls.multi_variable(inner)
+        return cls("custom", custom_str=inner, is_tight=tight)
 
     @property
     def big_o(self) -> str:
@@ -116,12 +120,13 @@ class ComplexityClass:
 
     @property
     def tight_bound(self) -> str:
-        """Returns tight bound notation Θ(...) or O(...) if loose."""
+        """Returns tight bound notation Θ(...) or 'Unknown' if loose/upper-bound only."""
         expr = self._raw_expression()
         if expr.startswith("Unsupported"):
             return "Unsupported / Cannot Determine"
-        prefix = "Θ" if self.is_tight else "O"
-        return f"{prefix}({expr})"
+        if not self.is_tight:
+            return "Unknown"
+        return f"Θ({expr})"
 
     def _raw_expression(self) -> str:
         if self.custom_str:

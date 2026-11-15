@@ -944,8 +944,9 @@ def test_h5_legacy_result_deserialization():
         "graph": {"active_complexity": "O(n)", "growth_points": []},
     }
     resp = AnalyzeResponse.model_validate(legacy_data)
+    assert resp.analysis_schema_version is None
+    assert resp.analysis_status == "LEGACY_RECORD"
     assert resp.analysis_complete is None
-    assert resp.analysis_status is None
     assert resp.analysis_scope is None
 
 

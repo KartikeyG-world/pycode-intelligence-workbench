@@ -93,7 +93,7 @@ export interface AnalyzeResponse {
   cost_model_complete?: boolean | null;
   analysis_complete?: boolean | null;
   analysis_status?: "COMPLETE" | "PARTIAL" | "UNSUPPORTED" | "LEGACY_RECORD" | null;
-  analysis_schema_version?: string;
+  analysis_schema_version?: string | null;
   unresolved_calls?: UnresolvedCallInfo[];
   unsupported_patterns?: string[];
   limitations?: string[];

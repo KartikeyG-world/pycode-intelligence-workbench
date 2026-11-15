@@ -7,50 +7,57 @@ from app.core.config import settings
 class SafeASTParser:
     """Safely parses Python source code into an AST without execution, enforcing strict resource boundaries."""
 
+    MAX_CODE_BYTES: int = 100_000
+    MAX_CODE_LENGTH_BYTES: int = 100_000
+    MAX_CODE_LINES: int = 3_000
     MAX_AST_NODES: int = 10_000
     MAX_AST_DEPTH: int = 200
 
     @staticmethod
     def parse_code(code: str) -> Tuple[Optional[ast.AST], Optional[SyntaxErrorInfo]]:
-        # Size limit check
-        if len(code.encode("utf-8")) > settings.MAX_CODE_LENGTH_BYTES:
+        # Tier 1: Pre-parse source boundary checks
+        encoded = code.encode("utf-8")
+        max_bytes = getattr(settings, "MAX_CODE_LENGTH_BYTES", SafeASTParser.MAX_CODE_BYTES)
+        if len(encoded) > max_bytes:
             return None, SyntaxErrorInfo(
                 line=1,
                 column=1,
-                message=f"Source code exceeds maximum allowed size ({settings.MAX_CODE_LENGTH_BYTES} bytes).",
+                message=f"Source code exceeds maximum allowed size ({max_bytes} bytes).",
                 snippet=code[:100] + "..."
             )
 
         line_count = len(code.splitlines())
-        if line_count > settings.MAX_CODE_LINES:
+        max_lines = getattr(settings, "MAX_CODE_LINES", SafeASTParser.MAX_CODE_LINES)
+        if line_count > max_lines:
             return None, SyntaxErrorInfo(
                 line=1,
                 column=1,
-                message=f"Source code exceeds maximum allowed line count ({settings.MAX_CODE_LINES} lines).",
+                message=f"Source code exceeds maximum allowed line count ({max_lines} lines).",
                 snippet=f"{line_count} lines"
             )
 
+        # Tier 2: Parser-stage execution with recoverable exception handling
         try:
             tree = ast.parse(code)
             
-            # Check AST node count and maximum depth to protect against deeply nested attacks
+            # Tier 3: Post-parse AST validation using strictly bounded iterative traversal
+            # (Prevents recursive call stack exhaustion when inspecting deep trees)
             node_count = 0
-            max_depth = 0
+            stack = [(tree, 1)]
             
-            def check_limits(node: ast.AST, current_depth: int):
-                nonlocal node_count, max_depth
+            while stack:
+                curr_node, curr_depth = stack.pop()
                 node_count += 1
-                if current_depth > max_depth:
-                    max_depth = current_depth
+                
                 if node_count > SafeASTParser.MAX_AST_NODES:
                     raise ValueError(f"AST node count exceeded limit ({SafeASTParser.MAX_AST_NODES} nodes).")
-                if current_depth > SafeASTParser.MAX_AST_DEPTH:
+                if curr_depth > SafeASTParser.MAX_AST_DEPTH:
                     raise RecursionError(f"AST nesting depth exceeded limit ({SafeASTParser.MAX_AST_DEPTH} levels).")
                 
-                for child in ast.iter_child_nodes(node):
-                    check_limits(child, current_depth + 1)
+                # Push children to iterative stack
+                for child in ast.iter_child_nodes(curr_node):
+                    stack.append((child, curr_depth + 1))
             
-            check_limits(tree, 1)
             return tree, None
 
         except (ValueError, RecursionError) as e:
@@ -58,6 +65,13 @@ class SafeASTParser:
                 line=1,
                 column=1,
                 message=f"Static analysis resource limit reached: {str(e)}",
+                snippet=None
+            )
+        except (MemoryError, TypeError) as e:
+            return None, SyntaxErrorInfo(
+                line=1,
+                column=1,
+                message=f"Static analysis resource or type constraint failure: {str(e)}",
                 snippet=None
             )
         except SyntaxError as e:

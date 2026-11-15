@@ -104,7 +104,18 @@ class FunctionIndex:
         # 2. Extract module-level executable statements (excluding defs)
         executable_stmts: List[ast.stmt] = []
         for stmt in tree.body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Default argument expressions and decorator call expressions execute at module definition time
+                for d in stmt.args.defaults + [kd for kd in stmt.args.kw_defaults if kd]:
+                    if any(isinstance(n, ast.Call) for n in ast.walk(d)):
+                        self.has_executable_module_code = True
+                        executable_stmts.append(ast.Expr(value=d))
+                for dec in stmt.decorator_list:
+                    if isinstance(dec, ast.Call):
+                        self.has_executable_module_code = True
+                        executable_stmts.append(ast.Expr(value=dec))
+                continue
+            if isinstance(stmt, ast.ClassDef):
                 continue
             executable_stmts.append(stmt)
             # Check if this statement is meaningful execution (loops, calls, expressions)
@@ -220,6 +231,8 @@ class FunctionIndex:
                         func_type = "static_method"
                     elif "classmethod" in decorators:
                         func_type = "class_method"
+                    elif "property" in decorators:
+                        func_type = "property"
                     elif not (is_generator or is_async or is_async_generator):
                         func_type = "method"
 

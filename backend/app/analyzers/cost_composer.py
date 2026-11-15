@@ -23,6 +23,13 @@ BUILTIN_COST_MODEL: Dict[str, ComplexityClass] = {
     "enumerate": ComplexityClass.constant(),
     "zip": ComplexityClass.constant(),
     "reversed": ComplexityClass.constant(),
+    "next": ComplexityClass.constant(),
+    "iter": ComplexityClass.constant(),
+    "hash": ComplexityClass.constant(),
+    "ord": ComplexityClass.constant(),
+    "chr": ComplexityClass.constant(),
+    "id": ComplexityClass.constant(),
+    "repr": ComplexityClass.constant(),
     "min": ComplexityClass.linear(),
     "max": ComplexityClass.linear(),
     "sum": ComplexityClass.linear(),
@@ -81,6 +88,9 @@ class FunctionCost:
         self.cost_model_complete: bool = True
         self.analysis_complete: bool = True
         self.analysis_status: str = "COMPLETE"
+        self.known_time_complexity: Optional[str] = None
+        self.known_space_complexity: Optional[str] = None
+        self.unresolved_costs: List[Dict[str, Any]] = []
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -89,11 +99,14 @@ class FunctionCost:
             "func_type": self.func_type,
             "time_complexity": self.time_complexity.big_o,
             "tight_bound": self.tight_bound,
+            "known_time_complexity": self.known_time_complexity or self.time_complexity.big_o,
+            "known_space_complexity": self.known_space_complexity or self.space_complexity.big_o,
             "space_complexity": self.space_complexity.big_o,
             "confidence": self.confidence,
             "is_recursive": self.is_recursive,
             "reasoning": self.complexity_reasoning,
             "patterns": self.detected_patterns,
+            "unresolved_costs": self.unresolved_costs,
             "unresolved_calls": [c.to_dict() for c in self.unresolved_calls],
             "limitations": self.limitations,
             "loops_count": len(self.loops),
@@ -183,6 +196,13 @@ class CostComposer:
                     c_cost, is_complete, reason = self._resolve_call_site_cost(site)
                     if not is_complete:
                         cost.unresolved_calls.append(site)
+                        cost.unresolved_costs.append({
+                            "operation": site.callee_name,
+                            "line": site.lineno,
+                            "context": "loop",
+                            "loop_depth": site.loop_depth,
+                            "reason": reason,
+                        })
                         cost.confidence = "LOW"
                         cost.cost_model_complete = False
                         cost.analysis_complete = False
@@ -213,6 +233,13 @@ class CostComposer:
                 call_cost, is_complete, reason = self._resolve_call_site_cost(site)
                 if not is_complete:
                     cost.unresolved_calls.append(site)
+                    cost.unresolved_costs.append({
+                        "operation": site.callee_name,
+                        "line": site.lineno,
+                        "context": "sequential",
+                        "loop_depth": 0,
+                        "reason": reason,
+                    })
                     cost.confidence = "LOW"
                     cost.cost_model_complete = False
                     cost.analysis_complete = False
@@ -241,7 +268,7 @@ class CostComposer:
             cost.detected_patterns.append(f"{comp_count} collection comprehension(s) (O(n))")
 
         # 6. Synthesize combined Time Complexity
-        time_class = ComplexityClass.dominant_of(loop_class, sequential_call_class, builtin_class)
+        known_time_class = ComplexityClass.dominant_of(loop_class, sequential_call_class, builtin_class)
         reasoning_parts: List[str] = list(loop_reasons)
 
         # If recurrence exists, compose with iterative costs
@@ -255,22 +282,37 @@ class CostComposer:
                 derivation_steps=recurrence_rel.derivation_steps,
             )
             rec_class = recurrence_rel.solved_complexity
-            time_class = ComplexityClass.dominant_of(time_class, rec_class)
+            known_time_class = ComplexityClass.dominant_of(known_time_class, rec_class)
             cost.detected_patterns.append(f"Recursive function '{func_info.name}'")
             reasoning_parts.append(
                 f"Extracted recurrence relation: {recurrence_rel.recurrence_str}. "
                 + " ".join(recurrence_rel.derivation_steps)
             )
 
-        if not reasoning_parts:
-            if time_class.category == "constant":
-                reasoning_parts.append(f"Scalar constant execution with no dominant loops or recursions ({time_class.big_o}).")
-            else:
-                reasoning_parts.append(f"Dominant computational cost derived as {time_class.big_o}.")
+        cost.known_time_complexity = known_time_class.big_o
 
-        cost.time_complexity = time_class
-        cost.tight_bound = time_class.tight_bound
-        cost.complexity_reasoning = " ".join(reasoning_parts)
+        if cost.unresolved_calls or cost.unresolved_costs:
+            cost.time_complexity = ComplexityClass.unknown("contains unresolved operations")
+            cost.tight_bound = "Unknown"
+            cost.analysis_complete = False
+            cost.analysis_status = "PARTIAL"
+            cost.confidence = "LOW"
+            op_names = [c.callee_name for c in cost.unresolved_calls] + [u.get("operation", "") for u in cost.unresolved_costs]
+            clean_op_names = list(dict.fromkeys(filter(None, op_names)))
+            reasoning_prefix = (
+                f"Known computational contribution established as {cost.known_time_complexity}. "
+                f"Total time complexity is unproven due to unresolved operation(s): {', '.join(clean_op_names)}. "
+            )
+            cost.complexity_reasoning = reasoning_prefix + " ".join(reasoning_parts)
+        else:
+            cost.time_complexity = known_time_class
+            cost.tight_bound = known_time_class.tight_bound
+            if not reasoning_parts:
+                if known_time_class.category == "constant":
+                    reasoning_parts.append(f"Scalar constant execution with no dominant loops or recursions ({known_time_class.big_o}).")
+                else:
+                    reasoning_parts.append(f"Dominant computational cost derived as {known_time_class.big_o}.")
+            cost.complexity_reasoning = " ".join(reasoning_parts)
 
         # Check unknown decorators
         if func_info.has_unknown_decorator:
@@ -286,29 +328,38 @@ class CostComposer:
             aux_space = recurrence_rel.auxiliary_space_class.big_o
             stack_space = recurrence_rel.stack_depth_class.big_o
             total_retained = recurrence_rel.total_retained_space_class.big_o
-            cost.space_complexity = ComplexityClass.from_big_o(total_retained)
+            cost.space_complexity = ComplexityClass.from_big_o(aux_space) if aux_space != "O(1)" else ComplexityClass.from_big_o(total_retained)
+            cost.known_space_complexity = cost.space_complexity.big_o
             cost.space_breakdown = SpaceBreakdown(
                 auxiliary=aux_space,
                 recursion_stack=stack_space,
                 output=output_space,
                 total_retained=total_retained,
+                peak_live_heap=recurrence_rel.peak_live_heap_class.big_o,
+                active_frames=recurrence_rel.active_frames_class.big_o,
+                cache_retained=recurrence_rel.cache_retained_class.big_o,
             )
             cost.confidence = recurrence_rel.confidence
             cost.confidence_reasons.extend(recurrence_rel.confidence_reasons)
         else:
-            # 1. Local auxiliary space
-            aux_class = ComplexityClass.constant()
+            # 1. Local allocation in caller frame
+            local_alloc_class = ComplexityClass.constant()
             if op_report.space_complexity_from_allocations != "O(1)":
-                aux_class = ComplexityClass.from_big_o(op_report.space_complexity_from_allocations)
-                cost.detected_patterns.append(f"Auxiliary memory allocation: {aux_class.big_o}")
+                local_alloc_class = ComplexityClass.from_big_o(op_report.space_complexity_from_allocations)
+                cost.detected_patterns.append(f"Auxiliary memory allocation: {local_alloc_class.big_o}")
 
-            # 2. Peak auxiliary space from callees (sequential calls do NOT multiply auxiliary space)
-            for callee_id in cost.reachable_callees:
-                callee_cost = self.computed_costs.get(callee_id)
-                if callee_cost:
-                    aux_class = ComplexityClass.dominant_of(aux_class, callee_cost.space_complexity)
+            # 2. Peak live heap: caller allocations simultaneously active with helper execution
+            peak_live_heap_class = local_alloc_class
+            for site in self.call_graph.call_sites:
+                if site.caller_id == func_id and site.callee_id:
+                    callee_cost = self.computed_costs.get(site.callee_id)
+                    if callee_cost:
+                        callee_heap = ComplexityClass.from_big_o(callee_cost.space_breakdown.peak_live_heap)
+                        # While helper executes, caller frame remains suspended with its local allocations live
+                        simul_heap = ComplexityClass.dominant_of(local_alloc_class, callee_heap)
+                        peak_live_heap_class = ComplexityClass.dominant_of(peak_live_heap_class, simul_heap)
 
-            # 3. Retained output space (if caller collects callee results across loop iterations)
+            # 3. Retained output space (with alias tracking)
             retained_output_class = ComplexityClass.constant()
             if self._detect_retained_loop_appends(func_info.node) and loops:
                 loop_multiplier = ComplexityClass.polynomial(float(len(loops)))
@@ -327,13 +378,19 @@ class CostComposer:
                 if callee_cost and callee_cost.is_recursive:
                     rec_stack_class = ComplexityClass.dominant_of(rec_stack_class, ComplexityClass.linear())
 
-            total_space = ComplexityClass.dominant_of(aux_class, retained_output_class, rec_stack_class)
+            # Peak auxiliary space combines simultaneously live heap and active frame stack
+            aux_class = ComplexityClass.dominant_of(peak_live_heap_class, rec_stack_class)
+            total_space = ComplexityClass.dominant_of(aux_class, retained_output_class)
             cost.space_complexity = total_space
+            cost.known_space_complexity = total_space.big_o
             cost.space_breakdown = SpaceBreakdown(
                 auxiliary=aux_class.big_o,
                 recursion_stack=rec_stack_class.big_o,
                 output=retained_output_class.big_o,
                 total_retained=total_space.big_o,
+                peak_live_heap=peak_live_heap_class.big_o,
+                active_frames=rec_stack_class.big_o,
+                cache_retained="O(1)",
             )
 
         self.computed_costs[func_id] = cost
@@ -494,6 +551,13 @@ class CostComposer:
                     c_cost, is_complete, reason = self._resolve_call_site_cost(site)
                     if not is_complete:
                         cost.unresolved_calls.append(site)
+                        cost.unresolved_costs.append({
+                            "operation": site.callee_name,
+                            "line": site.lineno,
+                            "context": "loop",
+                            "loop_depth": site.loop_depth,
+                            "reason": reason,
+                        })
                         cost.confidence = "LOW"
                         cost.cost_model_complete = False
                         cost.analysis_complete = False
@@ -651,24 +715,24 @@ class CostComposer:
         if method_name == "pop":
             if call_node.args:
                 val = self._extract_int_constant(call_node.args[0])
-                if val == 0:
+                if val is not None and val < 0:
+                    return ComplexityClass.constant(), True, f"list.pop({val}) removes from near the end in O(1) bounded time on '{receiver_name}'"
+                elif val == 0:
                     return ComplexityClass.linear(), True, f"list.pop(0) shifts elements requiring O(n) linear time on '{receiver_name}'"
-                elif val == -1:
-                    return ComplexityClass.constant(), True, f"list.pop(-1) removes last element in O(1) constant time on '{receiver_name}'"
                 elif val is not None and val > 0:
-                    return ComplexityClass.linear(), True, f"list.pop(k) shifts n-k elements requiring O(n-k) time on '{receiver_name}'"
+                    return ComplexityClass.linear(), True, f"list.pop({val}) shifts elements requiring O(n) time on '{receiver_name}'"
                 return ComplexityClass.linear(), True, f"list.pop(k) shifts following elements requiring O(n-k) time on '{receiver_name}'"
             return ComplexityClass.constant(), True, f"list.pop() removes last element in O(1) amortized time on '{receiver_name}'"
 
         if method_name == "insert":
             if call_node.args:
                 idx = self._extract_int_constant(call_node.args[0])
-                if idx == 0:
+                if idx is not None and idx < 0:
+                    return ComplexityClass.constant(), True, f"list.insert({idx}, ...) shifts bounded elements near end in O(1) time on '{receiver_name}'"
+                elif idx == 0:
                     return ComplexityClass.linear(), True, f"list.insert(0, ...) shifts elements requiring O(n) time on '{receiver_name}'"
-                elif idx == -1:
-                    return ComplexityClass.constant(), True, f"list.insert(-1, ...) appends to end in O(1) amortized time on '{receiver_name}'"
-                elif idx is not None:
-                    return ComplexityClass.linear(), True, f"list.insert(k, ...) shifts n-k elements in O(n-k) time on '{receiver_name}'"
+                elif idx is not None and idx > 0:
+                    return ComplexityClass.linear(), True, f"list.insert({idx}, ...) shifts elements in O(n) time on '{receiver_name}'"
             return ComplexityClass.linear(), True, f"list.insert() shifts subsequent elements requiring O(n) time on '{receiver_name}'"
 
         if method_name in ("extend", "copy", "remove", "count", "index", "update"):
@@ -677,7 +741,7 @@ class CostComposer:
         if method_name in ("append", "add", "discard", "clear", "get", "keys", "values", "items"):
             return ComplexityClass.constant(), True, f"Container method '{method_name}' executes in O(1) amortized/average time on '{receiver_name}' (assuming standard hash/array distribution)"
 
-        return ComplexityClass.constant(), False, f"Unknown method '{method_name}' on '{receiver_name}'"
+        return ComplexityClass.unknown(f"unknown method '{method_name}'"), False, f"Unknown method '{method_name}' on '{receiver_name}'"
 
     def _resolve_builtin_function_cost(
         self, site: CallSite
@@ -704,6 +768,19 @@ class CostComposer:
 
         if fname == "range":
             return ComplexityClass.constant(), True, "range() constructor returns iterator object in O(1) time and space"
+
+        if fname == "sum" and call and len(call.args) >= 2:
+            start_arg = call.args[1]
+            if isinstance(start_arg, (ast.List, ast.Tuple)) or (
+                isinstance(start_arg, ast.Call)
+                and isinstance(start_arg.func, ast.Name)
+                and start_arg.func.id in ("list", "tuple")
+            ):
+                return (
+                    ComplexityClass.polynomial(2.0),
+                    True,
+                    "sum() with container start argument concatenates lists in quadratic O(n^2) time",
+                )
 
         if fname in ("min", "max", "sum"):
             if call and call.args:
@@ -751,13 +828,13 @@ class CostComposer:
                     elif key_kw.id in BUILTIN_COST_MODEL:
                         return ComplexityClass.linearithmic(), True, f"sorted() with built-in key '{key_name}' in O(n log n)"
                     else:
-                        return ComplexityClass.linearithmic(), False, f"sorted() with unresolved key function '{key_name}'"
+                        return ComplexityClass.unknown(f"unresolved key function '{key_name}'"), False, f"sorted() with unresolved key function '{key_name}'"
             return ComplexityClass.linearithmic(), True, "sorted() Timsort worst-case O(n log n)"
 
         if fname in BUILTIN_COST_MODEL:
             return BUILTIN_COST_MODEL[fname], True, f"Built-in function '{fname}'"
 
-        return ComplexityClass.constant(), False, f"Unknown built-in '{fname}'"
+        return ComplexityClass.unknown(f"unknown built-in '{fname}'"), False, f"Unknown built-in '{fname}'"
 
     def _resolve_call_site_cost(
         self, site: CallSite
@@ -808,4 +885,4 @@ class CostComposer:
             return BUILTIN_METHOD_COST_MODEL[site.callee_name], True, f"Standard container method '{site.callee_name}'"
 
         # Unresolved external call
-        return ComplexityClass.constant(), False, f"unresolved external call '{site.callee_name}' on line {site.lineno}"
+        return ComplexityClass.unknown(f"unresolved external call '{site.callee_name}'"), False, f"unresolved external call '{site.callee_name}' on line {site.lineno}"

@@ -83,12 +83,22 @@ class RecursionAnalyzer:
         # 7. Check local non-recursive work per frame (e.g. slicing, loop, etc.)
         local_work = self._inspect_local_work(func_node)
 
+        # 8. Check local allocations per frame and whether they are released before recursive calls
+        local_alloc, alloc_released = self._inspect_recursive_local_allocations(func_node, func_name)
+
         # Canonical input size variable
         canonical_var = "n"
         if param_names:
             first_p = param_names[0]
             if first_p in ("m", "k", "W"):
                 canonical_var = first_p
+
+        cache_params = {"memo", "cache", "dp", "visited", "seen", "table", "store"}
+        input_params = [p for p in param_names if p.lower() not in cache_params]
+        if not input_params:
+            input_params = [canonical_var]
+        elif len(input_params) == 1 and input_params[0].lower() in ("arr", "lst", "nums", "items", "data", "values"):
+            input_params = [canonical_var]
 
         rel = RecurrenceRelation(
             func_name=func_name,
@@ -99,11 +109,13 @@ class RecursionAnalyzer:
             local_work=local_work,
             has_memoization=has_memoization,
             state_space=state_space,
-            parameter_names=[canonical_var],
+            parameter_names=input_params,
             leaf_output_work=leaf_output_work,
             retains_all_outputs=retains_all,
             recursion_inside_loop_size=loop_bound,
             is_bounded_cache=is_bounded_cache,
+            local_allocation_work=local_alloc,
+            allocation_released_before_recursion=alloc_released,
         )
 
         return rel
@@ -192,8 +204,10 @@ class RecursionAnalyzer:
                         return False, None, True
                     return True, "Θ(n)", True
 
+                cache_params = {"memo", "cache", "dp", "visited", "seen", "table", "store"}
+                input_params = [p for p in param_names if p.lower() not in cache_params]
                 is_bounded = bool("lru" in dec_id.lower() and maxsize_val is not None)
-                state = f"Θ({'*'.join(param_names[:2])})" if len(param_names) >= 2 else "Θ(n)"
+                state = f"Θ({'*'.join(input_params[:2])})" if len(input_params) >= 2 else "Θ(n)"
                 return True, state, is_bounded
 
         # Check in-body cache access: memo[key], cache[key]
@@ -339,3 +353,62 @@ class RecursionAnalyzer:
             c = loop.compute_tree_complexity()
             max_class = ComplexityClass.dominant_of(max_class, c)
         return max_class
+
+    def _inspect_recursive_local_allocations(
+        self, func_node: ast.FunctionDef, func_name: str
+    ) -> Tuple[Optional[ComplexityClass], bool]:
+        """Detects whether this recursive function allocates heap structures per frame,
+        and whether those allocations are deleted/released before recursive call(s).
+        """
+        allocated_vars: Dict[str, ComplexityClass] = {}
+        deleted_vars_before_call: Set[str] = set()
+
+        for stmt in func_node.body:
+            # Check for explicit deletions: del x
+            if isinstance(stmt, ast.Delete):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name):
+                        deleted_vars_before_call.add(target.id)
+
+            # Check for assignments that allocate memory
+            if isinstance(stmt, ast.Assign):
+                alloc_cost = self._evaluate_allocation_node(stmt.value)
+                if alloc_cost:
+                    for t in stmt.targets:
+                        if isinstance(t, ast.Name):
+                            allocated_vars[t.id] = alloc_cost
+            elif isinstance(stmt, ast.AnnAssign) and stmt.value:
+                alloc_cost = self._evaluate_allocation_node(stmt.value)
+                if alloc_cost and isinstance(stmt.target, ast.Name):
+                    allocated_vars[stmt.target.id] = alloc_cost
+
+            # Check if this statement contains a recursive call
+            for child in ast.walk(stmt):
+                if isinstance(child, ast.Call):
+                    if isinstance(child.func, ast.Name) and child.func.id == func_name:
+                        # Found recursive call
+                        pass
+
+        if not allocated_vars:
+            return None, False
+
+        max_alloc = max(allocated_vars.values(), key=lambda c: c.rank_score())
+        released = all(v in deleted_vars_before_call for v in allocated_vars)
+        return max_alloc, released
+
+    def _evaluate_allocation_node(self, node: Optional[ast.AST]) -> Optional[ComplexityClass]:
+        if node is None:
+            return None
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            if isinstance(node.left, ast.List) or isinstance(node.right, ast.List):
+                mult_operand = node.right if isinstance(node.left, ast.List) else node.left
+                if isinstance(mult_operand, ast.BinOp) and isinstance(mult_operand.op, ast.Mult):
+                    return ComplexityClass.polynomial(2.0)
+                return ComplexityClass.linear()
+        elif isinstance(node, ast.ListComp):
+            if isinstance(node.elt, (ast.ListComp, ast.BinOp)):
+                return ComplexityClass.polynomial(2.0)
+            return ComplexityClass.linear()
+        elif isinstance(node, (ast.DictComp, ast.SetComp)):
+            return ComplexityClass.linear()
+        return None

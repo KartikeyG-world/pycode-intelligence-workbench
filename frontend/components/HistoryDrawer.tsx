@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { HistoryItem } from "@/types/analysis";
 import { getHistory } from "@/lib/api";
-import { History, X, Clock, ArrowRight, Trash2, RefreshCw } from "lucide-react";
+import { History, X, Clock, ArrowRight, RefreshCw } from "lucide-react";
 
 interface HistoryDrawerProps {
   isOpen: boolean;
@@ -20,24 +20,27 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchHistory = async () => {
+  const loadHistory = React.useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const items = await getHistory();
       setHistoryItems(items);
-    } catch (err: any) {
-      setError(err.message || "Failed to load history");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to load history";
+      setError(msg);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (isOpen) {
-      fetchHistory();
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
+    const timer = setTimeout(() => {
+      void loadHistory();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isOpen, loadHistory]);
 
   if (!isOpen) return null;
 
@@ -52,7 +55,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={fetchHistory}
+              onClick={loadHistory}
               className="p-1 text-zinc-400 hover:text-zinc-200 transition"
               title="Refresh History"
             >

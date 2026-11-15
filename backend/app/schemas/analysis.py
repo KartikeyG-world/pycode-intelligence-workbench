@@ -79,6 +79,9 @@ class SpaceBreakdown(BaseModel):
     recursion_stack: str = "O(1)"
     output: str = "O(1)"
     total_retained: str = "O(1)"
+    peak_live_heap: str = "O(1)"
+    active_frames: str = "O(1)"
+    cache_retained: str = "O(1)"
 
 
 class RecurrenceInfo(BaseModel):
@@ -116,6 +119,9 @@ class AnalyzeResponse(BaseModel):
     analysis_complete: Optional[bool] = None
     analysis_status: Optional[str] = None  # "COMPLETE", "PARTIAL", "UNSUPPORTED", "LEGACY_RECORD"
     analysis_schema_version: Optional[str] = None
+    known_time_complexity: Optional[str] = None
+    known_space_complexity: Optional[str] = None
+    unresolved_costs: List[Dict[str, Any]] = Field(default_factory=list)
     unresolved_calls: List[Dict[str, Any]] = Field(default_factory=list)
     unsupported_patterns: List[str] = Field(default_factory=list)
     limitations: List[str] = Field(default_factory=list)

@@ -39,11 +39,18 @@ export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
                 Mathematical Asymptotic Derivation
               </h3>
             </div>
-            {tightBound && (
-              <span className="font-mono text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
-                {tightBound}
-              </span>
-            )}
+            <div className="flex items-center gap-1.5">
+              {timeComplexity && (
+                <span className="font-mono text-xs text-zinc-300 bg-zinc-800 px-2 py-0.5 rounded">
+                  {timeComplexity}
+                </span>
+              )}
+              {tightBound && tightBound !== "Unknown" && (
+                <span className="font-mono text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+                  {tightBound}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Recurrence Box if present */}

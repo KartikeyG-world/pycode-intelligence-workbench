@@ -148,7 +148,7 @@ Control flow analysis must NOT claim or attempt to provide "exact path enumerati
 ### B. Seven-Tier Architecture & Division of Responsibility
 The analysis pipeline adheres to a strict 7-tier layered hierarchy with unidirectional data flow:
 
-1. **AST Layer (`SafeASTParser`)**: Enforces input size boundaries (100 KB / 3,000 lines), AST node limits (50,000 nodes, depth $\le 200$), and parses source into Python standard AST representations without code execution.
+1. **AST Layer (`SafeASTParser`)**: Enforces input size boundaries (100 KB / 3,000 lines), AST node limits (10,000 nodes, depth $\le 200$), and parses source into Python standard AST representations without code execution.
 2. **Function Index (`FunctionIndex`)**: Extracts lexical scopes, parameter lists, class/method definitions, decorators, and maps identifiers across scopes.
 3. **Call Graph (`CallGraph`)**: Identifies interprocedural call sites, argument classifications, Tarjan Strongly Connected Components (SCCs), and mutual/direct recursion cycles.
 4. **Control Flow Graph (`CFGBuilder`)**: Constructs basic blocks, control flow edges, entry/exit points, loop headers, and exception handling paths per function scope.
@@ -158,3 +158,42 @@ The analysis pipeline adheres to a strict 7-tier layered hierarchy with unidirec
 
 ### C. Radon as Development-Time Validation Oracle
 External cyclomatic complexity tools (e.g., `radon`) are restricted to development-time test harness oracles and validation baselines (`tests/`). They must NOT be imported, linked, or executed as runtime production dependencies in backend code. The production workbench relies exclusively on internal, verified AST/CFG traversal.
+
+---
+
+## 8. Parser Security Boundaries and Residual Risk Disclosure
+
+The workbench implements defense-in-depth resource boundaries within `SafeASTParser`:
+- **Pre-parse Byte Limit**: Rejects inputs larger than 100,000 bytes (100 KB) before invoking the parser.
+- **Pre-parse Line Limit**: Rejects inputs with more than 3,000 lines.
+- **Post-parse Node Limit**: Strictly limits the AST to 10,000 nodes via iterative breadth-first/depth traversal.
+- **Post-parse Depth Limit**: Rejects AST hierarchies exceeding depth 200 via iterative stack tracking.
+
+### Residual Parser-Stage Risks & Threat Model
+1. **Interpreter-Level Parser Stack Exhaustion**:
+   `SafeASTParser` utilizes an iterative (non-recursive) queue-based traversal to validate the AST *after* parsing, ensuring the workbench never exhausts Python's call stack during inspection. However, `ast.parse()` itself invokes CPython's internal C-level parser. Sufficiently deep syntactical nesting (e.g., thousands of open parentheses or unary operators) can trigger C stack overflow or memory exhaustion within the C runtime before Python-level validation occurs (per official CPython documentation: https://docs.python.org/3.13/library/ast.html).
+2. **Recoverable vs. Non-Recoverable Parser Errors**:
+   The analyzer safely intercepts and returns structured `SyntaxErrorInfo` for recoverable Python exceptions: `SyntaxError`, `MemoryError`, `RecursionError`, and `ValueError`. It cannot intercept low-level OS segmentation faults or uncatchable C-stack overflow crashes from malicious C-level inputs.
+3. **Production Isolation Recommendation**:
+   For deployments accepting arbitrary, untrusted, or potentially hostile user code, AST parsing should execute inside an isolated ephemeral subprocess or sandboxed worker with strict OS-level CPU/memory `ulimits` (or containerized sandboxes). The current service guarantees AST inspection safety for all valid and standard syntactical forms under strict static-only execution.
+
+---
+
+## 9. Static Control Flow Graph vs. Dynamic Branch Coverage Invariants
+
+As Control Flow Graph (CFG) analysis is introduced, the distinction between static structural analysis and dynamic execution measurement must remain absolute:
+
+### Static CFG Structural Capabilities
+Static CFG analysis analyzes the syntax tree without running the code to compute:
+- Basic block decomposition and possible control-flow edges.
+- Conditional branch points (`if`, `match`, ternary expressions, loop headers).
+- Structural reachability across the AST/CFG model.
+- Loop back-edges and loop nesting depth.
+- McCabe Cyclomatic Complexity ($M = E - N + 2P$).
+- Maximum decision density and theoretical independent execution path upper bounds.
+
+### Absolute Prohibition on Fabricated Dynamic Coverage
+- **Static Analysis Cannot Prove Dynamic Path Execution**: Static CFG analysis models all syntactically possible paths; it cannot determine which branches are actually taken by a specific set of runtime user inputs or test vectors (which requires dynamic execution evidence such as `coverage.py` branch tracing).
+- **Zero Execution Boundary**: Because this workbench maintains a strict static-only security boundary with zero code execution (`eval`, `exec`, `subprocess`, or dynamic tracing are prohibited), the workbench must **never** claim measured runtime branch coverage or report fabricated execution coverage percentages.
+- **Path Feasibility & Undecidability**: Due to the Halting Problem and Rice's Theorem, exact path feasibility in the presence of arbitrary loops, recursive state, and dynamic dispatch is undecidable. The workbench provides sound structural models, never false promises of exact runtime path execution.
+

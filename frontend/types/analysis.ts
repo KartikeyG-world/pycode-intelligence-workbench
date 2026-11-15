@@ -45,6 +45,9 @@ export interface SpaceBreakdown {
   recursion_stack: string;
   output: string;
   total_retained: string;
+  peak_live_heap?: string;
+  active_frames?: string;
+  cache_retained?: string;
 }
 
 export interface RecurrenceInfo {
@@ -58,7 +61,7 @@ export interface RecurrenceInfo {
 
 export interface TheoreticalGraphData {
   active_complexity: string;
-  growth_points: Record<string, any>[];
+  growth_points: Record<string, unknown>[];
   disclaimer: string;
 }
 
@@ -83,21 +86,24 @@ export interface AnalyzeResponse {
   optimization_suggestions: string[];
   structure: CodeStructureData;
   graph: TheoreticalGraphData;
-  functions: Record<string, any>[];
-  loops: Record<string, any>[];
-  recursion: Record<string, any>;
+  functions: Record<string, unknown>[];
+  loops: Record<string, unknown>[];
+  recursion: Record<string, unknown>;
   analysis_scope?: "module" | "function" | "function_collection" | "legacy_unknown" | null;
   analysis_target?: string | null;
-  function_analyses?: Record<string, any>[];
+  function_analyses?: Record<string, unknown>[];
   call_graph_complete?: boolean | null;
   cost_model_complete?: boolean | null;
   analysis_complete?: boolean | null;
   analysis_status?: "COMPLETE" | "PARTIAL" | "UNSUPPORTED" | "LEGACY_RECORD" | null;
   analysis_schema_version?: string | null;
+  known_time_complexity?: string | null;
+  known_space_complexity?: string | null;
+  unresolved_costs?: Record<string, unknown>[];
   unresolved_calls?: UnresolvedCallInfo[];
   unsupported_patterns?: string[];
   limitations?: string[];
-  call_graph?: Record<string, any>;
+  call_graph?: Record<string, unknown>;
   error?: SyntaxErrorInfo;
   submission_id?: string;
 }

@@ -66,7 +66,7 @@ export async function checkBackendHealth(): Promise<{
       return { status: "degraded", database: { connected: false, type: "none" } };
     }
     return response.json();
-  } catch (err) {
+  } catch {
     return { status: "offline", database: { connected: false, type: "disconnected" } };
   }
 }

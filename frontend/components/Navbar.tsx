@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Activity, History, FileText, CheckCircle2, AlertCircle } from "lucide-react";
+import { Activity, History, FileText } from "lucide-react";
 
 interface NavbarProps {
   backendStatus: { status: string; dbConnected: boolean; dbType: string };

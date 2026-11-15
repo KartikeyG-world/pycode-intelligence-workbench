@@ -396,5 +396,6 @@ class FunctionIndex:
 BUILTIN_OPERATIONS: Set[str] = {
     "len", "range", "enumerate", "zip", "min", "max", "sum", "sorted",
     "reversed", "map", "filter", "any", "all", "abs", "round", "int",
-    "float", "str", "bool", "list", "dict", "set", "tuple", "print"
+    "float", "str", "bool", "list", "dict", "set", "tuple", "print",
+    "next", "iter", "hash", "ord", "chr", "id", "repr"
 }

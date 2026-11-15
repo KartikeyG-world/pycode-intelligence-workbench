@@ -19,8 +19,6 @@ import {
   TrendingUp,
   Network,
   Sparkles,
-  Layers,
-  Terminal,
 } from "lucide-react";
 
 export default function Home() {
@@ -47,7 +45,7 @@ export default function Home() {
           dbConnected: health.database.connected,
           dbType: health.database.type,
         });
-      } catch (e) {
+      } catch {
         setBackendHealth({
           status: "offline",
           dbConnected: false,
@@ -55,7 +53,7 @@ export default function Home() {
         });
       }
     };
-    checkHealth();
+    void checkHealth();
     const interval = setInterval(checkHealth, 15000);
     return () => clearInterval(interval);
   }, []);
@@ -73,10 +71,9 @@ export default function Home() {
           `Syntax Error on Line ${res.error.line}, Column ${res.error.column}: ${res.error.message}`
         );
       }
-    } catch (err: any) {
-      setErrorMessage(
-        err.message || "Failed to connect to Python static analysis service."
-      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to connect to Python static analysis service.";
+      setErrorMessage(msg);
     } finally {
       setIsLoading(false);
     }
@@ -97,11 +94,11 @@ export default function Home() {
         success: true,
         time_complexity: detail.time_complexity,
         space_complexity: detail.space_complexity,
-        confidence: detail.confidence as any,
+        confidence: detail.confidence as AnalyzeResponse["confidence"],
         complexity_reasoning: detail.complexity_reasoning,
         statistics: detail.statistics,
         structure: detail.structure,
-        graph: detail.graph_data as any,
+        graph: detail.graph_data,
         detected_patterns: detail.detected_patterns,
         optimization_suggestions: detail.optimization_suggestions,
         functions: [],
@@ -112,8 +109,9 @@ export default function Home() {
         analysis_status: "LEGACY_RECORD",
         submission_id: detail.submission_id,
       });
-    } catch (err: any) {
-      setErrorMessage("Could not retrieve past analysis record: " + err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setErrorMessage("Could not retrieve past analysis record: " + msg);
     } finally {
       setIsLoading(false);
     }
@@ -223,6 +221,8 @@ export default function Home() {
                 analysisTarget={analysisResult.analysis_target}
                 analysisComplete={analysisResult.analysis_complete}
                 analysisStatus={analysisResult.analysis_status}
+                knownTimeComplexity={analysisResult.known_time_complexity}
+                knownSpaceComplexity={analysisResult.known_space_complexity}
               />
 
               {/* 2. Analysis Statistics */}

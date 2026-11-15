@@ -15,6 +15,8 @@ interface ComplexityOverviewProps {
   analysisTarget?: string | null;
   analysisComplete?: boolean | null;
   analysisStatus?: "COMPLETE" | "PARTIAL" | "UNSUPPORTED" | "LEGACY_RECORD" | null;
+  knownTimeComplexity?: string | null;
+  knownSpaceComplexity?: string | null;
 }
 
 export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
@@ -28,9 +30,18 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
   analysisTarget,
   analysisComplete = null,
   analysisStatus = null,
+  knownTimeComplexity,
+  knownSpaceComplexity,
 }) => {
   // Helper for color coding Big-O
   const getTimeColor = (comp: string) => {
+    if (comp.includes("Unknown")) {
+      return {
+        bg: "bg-amber-950/20 border-amber-500/40 text-amber-300",
+        badge: "bg-amber-500/20 text-amber-300",
+        label: "Partial / Unresolved",
+      };
+    }
     if (comp === "O(1)" || comp === "O(log n)") {
       return {
         bg: "bg-emerald-500/10 border-emerald-500/30 text-emerald-400",
@@ -144,6 +155,11 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
           <div className="text-3xl font-mono font-bold tracking-tight mb-1 text-white">
             {timeComplexity}
           </div>
+          {knownTimeComplexity && timeComplexity.includes("Unknown") && (
+            <div className="text-xs font-mono text-zinc-300 font-medium mb-1">
+              Known work: <span className="text-emerald-400 font-bold">{knownTimeComplexity}</span> (total unproven)
+            </div>
+          )}
           {tightBound && (
             <div className="text-xs font-mono text-emerald-400/90 font-semibold mb-1">
               Tight Bound: {tightBound}
@@ -164,6 +180,7 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
           </div>
           <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-zinc-800 text-zinc-300">
             Total: {spaceComplexity}
+            {knownSpaceComplexity && spaceComplexity.includes("Unknown") && ` (Known: ${knownSpaceComplexity})`}
           </span>
         </div>
         <div className="space-y-1.5 text-xs">

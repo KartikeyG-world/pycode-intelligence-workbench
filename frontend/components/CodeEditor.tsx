@@ -2,7 +2,7 @@
 
 import React, { useRef } from "react";
 import Editor, { OnMount } from "@monaco-editor/react";
-import { Play, RotateCcw, Code2, Sparkles, BookOpen } from "lucide-react";
+import { Play, RotateCcw, Code2, BookOpen } from "lucide-react";
 import { CODE_EXAMPLES, CodeExample } from "@/lib/examples";
 
 interface CodeEditorProps {
@@ -20,7 +20,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   isLoading,
   onSelectExample,
 }) => {
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;

@@ -69,6 +69,11 @@ class ComplexityClass:
         return cls("unsupported", custom_str=f"Unsupported ({reason})", is_tight=False)
 
     @classmethod
+    def unknown(cls, reason: str = "Unresolved operation") -> "ComplexityClass":
+        custom = f"Unknown ({reason})" if reason != "Unresolved operation" else "Unknown"
+        return cls("unknown", custom_str=custom, is_tight=False)
+
+    @classmethod
     def from_big_o(cls, notation: str, is_tight: Optional[bool] = None) -> "ComplexityClass":
         clean = notation.strip()
         is_explicit_theta = clean.startswith("Θ(") or clean.startswith("Theta(")
@@ -108,6 +113,8 @@ class ComplexityClass:
             return cls("factorial", is_tight=tight)
         if "Unsupported" in inner:
             return cls.unsupported()
+        if "Unknown" in inner:
+            return cls.unknown(inner)
         return cls("custom", custom_str=inner, is_tight=tight)
 
     @property
@@ -116,14 +123,16 @@ class ComplexityClass:
         expr = self._raw_expression()
         if expr.startswith("Unsupported"):
             return "Unsupported / Cannot Determine"
+        if expr.startswith("Unknown"):
+            return expr
         return f"O({expr})"
 
     @property
     def tight_bound(self) -> str:
         """Returns tight bound notation Θ(...) or 'Unknown' if loose/upper-bound only."""
         expr = self._raw_expression()
-        if expr.startswith("Unsupported"):
-            return "Unsupported / Cannot Determine"
+        if expr.startswith("Unsupported") or expr.startswith("Unknown"):
+            return "Unknown"
         if not self.is_tight:
             return "Unknown"
         return f"Θ({expr})"
@@ -172,6 +181,8 @@ class ComplexityClass:
 
     def rank_score(self) -> float:
         """Numerical ranking to evaluate dominance in sums max(f(n), g(n))."""
+        if self.category == "unknown":
+            return -1.0
         if self.category == "constant":
             return 0.0
         if self.category == "logarithmic":
@@ -210,7 +221,7 @@ class ComplexityClass:
 
     @classmethod
     def dominant_of(cls, *classes: "ComplexityClass") -> "ComplexityClass":
-        valid = [c for c in classes if c.category != "unsupported"]
+        valid = [c for c in classes if c.category not in ("unsupported", "unknown")]
         if not valid:
             return classes[0] if classes else cls.unsupported()
         return max(valid, key=lambda c: c.rank_score())

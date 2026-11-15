@@ -21,6 +21,8 @@ class RecurrenceRelation:
         retains_all_outputs: bool = False,
         recursion_inside_loop_size: Optional[str] = None,
         is_bounded_cache: bool = False,
+        local_allocation_work: Optional[ComplexityClass] = None,
+        allocation_released_before_recursion: bool = False,
     ):
         self.func_name = func_name
         self.branching_factor = branching_factor
@@ -35,6 +37,8 @@ class RecurrenceRelation:
         self.retains_all_outputs = retains_all_outputs
         self.recursion_inside_loop_size = recursion_inside_loop_size
         self.is_bounded_cache = is_bounded_cache
+        self.local_allocation_work = local_allocation_work
+        self.allocation_released_before_recursion = allocation_released_before_recursion
 
         # Output derivation artifacts
         self.is_solved: bool = False
@@ -46,6 +50,9 @@ class RecurrenceRelation:
         self.auxiliary_space_class: ComplexityClass = ComplexityClass.constant()
         self.output_space_class: ComplexityClass = ComplexityClass.constant()
         self.total_retained_space_class: ComplexityClass = ComplexityClass.constant()
+        self.peak_live_heap_class: ComplexityClass = ComplexityClass.constant()
+        self.active_frames_class: ComplexityClass = ComplexityClass.constant()
+        self.cache_retained_class: ComplexityClass = ComplexityClass.constant()
         self.derivation_steps: List[str] = []
         self.confidence: str = "HIGH"
         self.confidence_reasons: List[str] = []
@@ -65,6 +72,9 @@ class RecurrenceRelation:
             "auxiliary_space": self.auxiliary_space_class.big_o,
             "output_space": self.output_space_class.big_o,
             "total_retained_space": self.total_retained_space_class.big_o,
+            "peak_live_heap": self.peak_live_heap_class.big_o,
+            "active_frames": self.active_frames_class.big_o,
+            "cache_retained": self.cache_retained_class.big_o,
             "confidence": self.confidence,
             "derivation_steps": self.derivation_steps,
             "confidence_reasons": self.confidence_reasons,
@@ -76,7 +86,13 @@ class RecurrenceSolver:
 
     @classmethod
     def solve(cls, rel: RecurrenceRelation) -> RecurrenceRelation:
-        var = rel.parameter_names[0] if rel.parameter_names else "n"
+        var = "n"
+        if rel.parameter_names:
+            first_p = rel.parameter_names[0]
+            if first_p in ("m", "k", "W"):
+                var = first_p
+            elif first_p != "n" and len(rel.parameter_names) == 1 and first_p.lower() not in ("arr", "lst", "nums", "items", "data", "values"):
+                var = first_p
 
         # 1. Memoized Recursion
         if rel.has_memoization:
@@ -125,7 +141,34 @@ class RecurrenceSolver:
 
         # Stack depth is n / b -> O(n)
         rel.stack_depth_class = ComplexityClass.linear(var)
-        rel.auxiliary_space_class = ComplexityClass.linear(var)
+        rel.active_frames_class = ComplexityClass.linear(var)
+
+        # Peak simultaneously live heap
+        if rel.local_allocation_work is not None and rel.local_allocation_work > ComplexityClass.constant():
+            alloc = rel.local_allocation_work
+            if rel.allocation_released_before_recursion:
+                rel.peak_live_heap_class = alloc
+                rel.auxiliary_space_class = ComplexityClass.dominant_of(rel.active_frames_class, alloc)
+                rel.derivation_steps.append(
+                    f"Frame allocates {alloc.big_o} heap memory, released before recursive invocation via del. "
+                    f"Peak live heap is bounded by a single frame ({alloc.big_o})."
+                )
+            else:
+                if alloc.category == "linear":
+                    accumulated_heap = ComplexityClass.polynomial(2.0, var)
+                elif alloc.category == "polynomial":
+                    accumulated_heap = ComplexityClass.polynomial(alloc.poly_degree + 1.0, var)
+                else:
+                    accumulated_heap = ComplexityClass.multiply(ComplexityClass.linear(var), alloc)
+                rel.peak_live_heap_class = accumulated_heap
+                rel.auxiliary_space_class = accumulated_heap
+                rel.derivation_steps.append(
+                    f"Each active recursive frame retains {alloc.big_o} heap memory across {var} levels. "
+                    f"Simultaneously live heap memory accumulates to {accumulated_heap.big_o}."
+                )
+        else:
+            rel.peak_live_heap_class = ComplexityClass.constant()
+            rel.auxiliary_space_class = rel.active_frames_class
 
         if a == 1:
             # Single linear recurrence: T(n) = T(n-b) + f(n)
@@ -364,27 +407,46 @@ class RecurrenceSolver:
         state_desc = rel.state_space or f"Θ({var})"
         rel.recurrence_str = f"T({var}) = {rel.branching_factor}T(...) with Memoization/Cache"
         rel.stack_depth_class = ComplexityClass.linear(var)
+        rel.active_frames_class = ComplexityClass.linear(var)
+
+        # Check multi-dimensional state space
+        if len(rel.parameter_names) >= 2:
+            p1, p2 = rel.parameter_names[:2]
+            state_class = ComplexityClass.multi_variable(f"{p1}*{p2}")
+        elif "W" in state_desc:
+            state_class = ComplexityClass.multi_variable(f"{var}*W")
+        else:
+            state_class = ComplexityClass.linear(var)
+
+        rel.solved_complexity = state_class
+        rel.traversal_complexity = state_class
+
+        # Check cache memory
+        ret_alloc = rel.local_allocation_work
         if rel.is_bounded_cache:
-            rel.auxiliary_space_class = ComplexityClass.constant()
+            if ret_alloc and ret_alloc > ComplexityClass.constant():
+                rel.cache_retained_class = ret_alloc
+            else:
+                rel.cache_retained_class = ComplexityClass.constant()
+            rel.auxiliary_space_class = ComplexityClass.dominant_of(rel.active_frames_class, rel.cache_retained_class)
+            rel.total_retained_space_class = rel.auxiliary_space_class
         else:
-            rel.auxiliary_space_class = ComplexityClass.linear(var)
+            if ret_alloc and ret_alloc > ComplexityClass.constant():
+                cache_mem = ComplexityClass.multiply(state_class, ret_alloc)
+            else:
+                cache_mem = state_class
+            rel.cache_retained_class = cache_mem
+            rel.auxiliary_space_class = ComplexityClass.dominant_of(rel.active_frames_class, cache_mem)
+            rel.total_retained_space_class = cache_mem
 
-        if "W" in state_desc:
-            # Knapsack with memoization: O(n * W)
-            rel.solved_complexity = ComplexityClass.multi_variable(f"{var}*W")
-            rel.total_retained_space_class = ComplexityClass.multi_variable(f"{var}*W")
-        else:
-            rel.solved_complexity = ComplexityClass.linear(var)
-            rel.total_retained_space_class = ComplexityClass.linear(var)
-
-        rel.traversal_complexity = rel.solved_complexity
         rel.is_solved = True
         rel.confidence = "HIGH"
         rel.derivation_steps = [
             "Memoization table / cache detected for recursive state transitions.",
             f"State space is bounded by distinct subproblem states: {state_desc}.",
             "Each state is computed at most once; subsequent queries are resolved in O(1) time.",
-            f"Total time complexity reduces from naive exponential to polynomial {rel.solved_complexity.tight_bound}.",
+            f"Total time complexity reduces from naive exponential to {rel.solved_complexity.tight_bound}.",
+            f"Cache retained memory: {rel.cache_retained_class.big_o} under standard hash distribution.",
         ]
         rel.confidence_reasons = [
             "Cache lookup / assignment verified in AST.",

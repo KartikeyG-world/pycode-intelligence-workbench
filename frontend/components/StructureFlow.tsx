@@ -18,8 +18,16 @@ interface StructureFlowProps {
   structure: CodeStructureData;
 }
 
+interface CustomNodeData {
+  node_type?: string;
+  label?: string;
+  line?: number;
+  complexity?: string;
+  details?: string;
+}
+
 // Custom Node Component
-const CustomStructureNode = ({ data }: { data: any }) => {
+const CustomStructureNode = ({ data }: { data: CustomNodeData }) => {
   const getNodeBadge = () => {
     switch (data.node_type) {
       case "function":

@@ -68,6 +68,44 @@ class ComplexityClass:
     def unsupported(cls, reason: str = "Unsupported recurrence") -> "ComplexityClass":
         return cls("unsupported", custom_str=f"Unsupported ({reason})", is_tight=False)
 
+    @classmethod
+    def from_big_o(cls, notation: str) -> "ComplexityClass":
+        clean = notation.strip()
+        if clean.startswith("O(") and clean.endswith(")"):
+            inner = clean[2:-1].strip()
+        elif clean.startswith("Θ(") and clean.endswith(")"):
+            inner = clean[2:-1].strip()
+        else:
+            inner = clean
+
+        if inner == "1":
+            return cls.constant()
+        if inner in ("log n", "log(n)"):
+            return cls.logarithmic()
+        if inner == "n":
+            return cls.linear()
+        if inner in ("n log n", "n log(n)", "n*log(n)", "n*log n"):
+            return cls.linearithmic()
+        if inner in ("n²", "n^2"):
+            return cls.polynomial(2.0)
+        if "log" in inner and ("n²" in inner or "n^2" in inner):
+            return cls("polynomial", poly_degree=2.0, log_degree=1.0)
+        if inner in ("n³", "n^3"):
+            return cls.polynomial(3.0)
+        if "log" in inner and ("n³" in inner or "n^3" in inner):
+            return cls("polynomial", poly_degree=3.0, log_degree=1.0)
+        if inner in ("n⁴", "n^4"):
+            return cls.polynomial(4.0)
+        if inner in ("2^n", "2ⁿ"):
+            return cls.exponential(2.0)
+        if inner in ("3^n", "3ⁿ"):
+            return cls.exponential(3.0)
+        if inner in ("n!",):
+            return cls.factorial()
+        if "Unsupported" in inner:
+            return cls.unsupported()
+        return cls.multi_variable(inner)
+
     @property
     def big_o(self) -> str:
         """Returns standard Big-O notation, e.g. O(2^n)."""
@@ -107,11 +145,11 @@ class ComplexityClass:
 
         if self.category == "polynomial":
             deg = int(self.poly_degree) if self.poly_degree.is_integer() else self.poly_degree
-            if deg == 2:
-                return f"{var}²"
-            if deg == 3:
-                return f"{var}³"
-            return f"{var}^{deg}"
+            base = f"{var}²" if deg == 2 else (f"{var}³" if deg == 3 else f"{var}^{deg}")
+            if self.log_degree > 0:
+                log_str = f"log {var}" if self.log_degree == 1.0 else f"log^{int(self.log_degree)} {var}"
+                return f"{base} {log_str}"
+            return base
 
         if self.category == "exponential":
             b = int(self.exp_base) if self.exp_base.is_integer() else round(self.exp_base, 2)
@@ -138,7 +176,7 @@ class ComplexityClass:
         if self.category == "linearithmic":
             return 15.0
         if self.category == "polynomial":
-            return 10.0 * self.poly_degree
+            return 10.0 * self.poly_degree + 2.0 * self.log_degree
         if self.category == "custom":
             return 25.0
         if self.category == "exponential":
@@ -188,9 +226,22 @@ class ComplexityClass:
             new_poly = c2.poly_degree + c1.poly_degree
             return cls.exponential(base=c2.exp_base, poly_factor=new_poly)
 
+        # Linear/Polynomial * Linearithmic: O(n) * O(n log n) = O(n² log n)
+        if c1.category in ("linear", "polynomial") and c2.category == "linearithmic":
+            new_poly = c1.poly_degree + c2.poly_degree
+            new_log = c1.log_degree + c2.log_degree
+            return cls("polynomial", poly_degree=new_poly, log_degree=new_log)
+        if c2.category in ("linear", "polynomial") and c1.category == "linearithmic":
+            new_poly = c2.poly_degree + c1.poly_degree
+            new_log = c2.log_degree + c1.log_degree
+            return cls("polynomial", poly_degree=new_poly, log_degree=new_log)
+
         # Polynomial * Polynomial
         if c1.category in ("linear", "polynomial") and c2.category in ("linear", "polynomial"):
             deg = c1.poly_degree + c2.poly_degree
+            log_deg = c1.log_degree + c2.log_degree
+            if log_deg > 0:
+                return cls("polynomial", poly_degree=deg, log_degree=log_deg)
             return cls.polynomial(deg)
 
         # Linear * Logarithmic -> Linearithmic

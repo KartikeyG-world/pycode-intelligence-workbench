@@ -68,10 +68,10 @@ class LoopAnalyzer:
         self.loops: List[LoopInfo] = []
         self._loop_counter = 0
 
-    def analyze(self, tree: ast.AST) -> List[LoopInfo]:
+    def analyze(self, tree: ast.AST, skip_nested_functions: bool = False) -> List[LoopInfo]:
         self.loops = []
         self._loop_counter = 0
-        self._traverse(tree, current_parent=None, current_depth=1, outer_vars=[])
+        self._traverse(tree, current_parent=None, current_depth=1, outer_vars=[], skip_nested_functions=skip_nested_functions)
         return self.loops
 
     def _get_next_id(self) -> str:
@@ -83,9 +83,13 @@ class LoopAnalyzer:
         node: ast.AST,
         current_parent: Optional[LoopInfo],
         current_depth: int,
-        outer_vars: List[str]
+        outer_vars: List[str],
+        skip_nested_functions: bool = False,
     ):
         for child in ast.iter_child_nodes(node):
+            if skip_nested_functions and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+
             if isinstance(child, ast.For):
                 loop_info = self._analyze_for_loop(child, current_parent, current_depth, outer_vars)
                 if current_parent is not None:
@@ -97,7 +101,7 @@ class LoopAnalyzer:
                 if loop_info.variable:
                     new_outer.append(loop_info.variable)
 
-                self._traverse(child, current_parent=loop_info, current_depth=current_depth + 1, outer_vars=new_outer)
+                self._traverse(child, current_parent=loop_info, current_depth=current_depth + 1, outer_vars=new_outer, skip_nested_functions=skip_nested_functions)
 
             elif isinstance(child, ast.While):
                 loop_info = self._analyze_while_loop(child, current_parent, current_depth)
@@ -105,9 +109,9 @@ class LoopAnalyzer:
                     current_parent.children.append(loop_info)
                 else:
                     self.loops.append(loop_info)
-                self._traverse(child, current_parent=loop_info, current_depth=current_depth + 1, outer_vars=outer_vars)
+                self._traverse(child, current_parent=loop_info, current_depth=current_depth + 1, outer_vars=outer_vars, skip_nested_functions=skip_nested_functions)
             else:
-                self._traverse(child, current_parent, current_depth, outer_vars)
+                self._traverse(child, current_parent, current_depth, outer_vars, skip_nested_functions=skip_nested_functions)
 
     def _analyze_for_loop(
         self,

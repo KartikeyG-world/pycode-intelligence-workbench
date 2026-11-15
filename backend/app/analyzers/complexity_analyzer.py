@@ -1,12 +1,15 @@
 import ast
 import math
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from app.analyzers.loop_analyzer import LoopAnalyzer, LoopInfo
 from app.analyzers.recursion_analyzer import RecursionAnalyzer
 from app.analyzers.recurrence_solver import RecurrenceRelation
 from app.analyzers.operation_analyzer import OperationAnalyzer, OperationReport
 from app.analyzers.structure_analyzer import StructureAnalyzer
 from app.analyzers.complexity_classes import ComplexityClass
+from app.analyzers.function_index import FunctionIndex
+from app.analyzers.call_graph import CallGraph
+from app.analyzers.cost_composer import CostComposer, FunctionCost
 from app.schemas.analysis import (
     AnalyzeResponse,
     CodeStatistics,
@@ -27,37 +30,107 @@ class ComplexityAnalyzer:
         self.structure_analyzer = StructureAnalyzer()
 
     def analyze(self, tree: ast.AST) -> AnalyzeResponse:
-        # 1. Run component analyzers
+        # 1. Index functions and construct interprocedural call graph
+        function_index = FunctionIndex.from_ast(tree)
+        call_graph = CallGraph(function_index)
+
+        # 2. Extract global loop and recurrence objects for backward compatibility
         loops = self.loop_analyzer.analyze(tree)
         recurrence_relations = self.recursion_analyzer.analyze(tree)
         op_report = self.operation_analyzer.analyze(tree)
 
-        has_recursion = len(recurrence_relations) > 0
+        has_recursion = len(recurrence_relations) > 0 or len(call_graph.recursion_components) > 0
         stats, structure = self.structure_analyzer.analyze(
             tree,
             recursion_detected=has_recursion,
-            recursion_count=len(recurrence_relations)
+            recursion_count=max(len(recurrence_relations), len(call_graph.recursion_components)),
         )
 
-        # 2. Determine Time Complexity, Tight Bound, Space Breakdown, Confidence, and Derivation
-        (
-            time_comp,
-            tight_bound,
-            space_comp,
-            space_breakdown,
-            confidence,
-            confidence_reasons,
-            reasoning,
-            detected_patterns,
-            recurrence_info,
-        ) = self._compute_complexities(loops, recurrence_relations, op_report, stats)
+        # 3. Interprocedural cost composition bottom-up along call graph SCC DAG
+        composer = CostComposer(
+            index=function_index,
+            call_graph=call_graph,
+            loop_analyzer=self.loop_analyzer,
+            recursion_analyzer=self.recursion_analyzer,
+            operation_analyzer=self.operation_analyzer,
+            loop_tree_evaluator=self._evaluate_loop_trees,
+        )
+        composer.compose_all()
 
-        # 3. Generate rule-based optimization suggestions
+        # 4. Determine Analysis Target and Scope
+        scope = "module"
+        target_name = "<module>"
+        chosen_cost: FunctionCost
+
+        user_funcs = [f for fid, f in function_index.functions.items() if fid != "<module>"]
+
+        if function_index.has_executable_module_code:
+            scope = "module"
+            target_name = "<module>"
+            chosen_cost = composer.computed_costs.get("<module>", FunctionCost("<module>", "<module>"))
+        elif len(user_funcs) == 1:
+            scope = "function"
+            f_info = user_funcs[0]
+            target_name = f_info.name
+            chosen_cost = composer.computed_costs.get(f_info.func_id, FunctionCost(f_info.func_id, f_info.name))
+        elif len(user_funcs) > 1:
+            roots = call_graph.get_root_functions()
+            if not roots:
+                # All functions are in cycles (e.g. mutual recursion component)
+                roots = [scc[0] for scc in call_graph.sccs if scc]
+
+            if len(roots) == 1:
+                scope = "function"
+                r_fid = roots[0]
+                target_name = function_index.functions[r_fid].name
+                chosen_cost = composer.computed_costs.get(r_fid, FunctionCost(r_fid, target_name))
+            else:
+                scope = "function_collection"
+                root_names = [function_index.functions[r].name for r in roots if r in function_index.functions]
+                target_name = ", ".join(root_names)
+                root_costs = [composer.computed_costs[r] for r in roots if r in composer.computed_costs]
+                if root_costs:
+                    chosen_cost = max(root_costs, key=lambda c: c.time_complexity.rank_score())
+                else:
+                    chosen_cost = composer.computed_costs.get("<module>", FunctionCost("<module>", "<module>"))
+        else:
+            scope = "module"
+            target_name = "<module>"
+            chosen_cost = composer.computed_costs.get("<module>", FunctionCost("<module>", "<module>"))
+
+        # 5. Extract derived complexity and bounds
+        time_comp = chosen_cost.time_complexity.big_o
+        tight_bound = chosen_cost.tight_bound
+        space_comp = chosen_cost.space_complexity.big_o
+        space_breakdown = chosen_cost.space_breakdown
+        confidence = chosen_cost.confidence
+        confidence_reasons = list(chosen_cost.confidence_reasons)
+        confidence_reasons.append(f"Evaluated analysis scope: {scope} (target: {target_name})")
+
+        detected_patterns = list(dict.fromkeys(chosen_cost.detected_patterns))
+        reasoning = chosen_cost.complexity_reasoning
+
+        if scope == "function_collection":
+            prefix = (
+                f"Analyzed function collection containing independent functions: {target_name}. "
+                f"Headline complexity is dominated by '{chosen_cost.name}' with complexity {time_comp}. "
+                f"(Module-level execution without invocations is O(1)). "
+            )
+            reasoning = prefix + reasoning
+
+        recurrence_info = chosen_cost.recurrence_info or RecurrenceInfo(present=False)
+
+        # 6. Generate rule-based optimization suggestions
         optimization_suggestions = list(op_report.optimization_hints)
         self._add_algorithmic_suggestions(time_comp, space_comp, recurrence_relations, loops, optimization_suggestions)
 
-        # 4. Generate theoretical growth graph data
+        # 7. Generate theoretical growth graph data
         graph_data = self._generate_graph_data(time_comp)
+
+        # 8. Function analyses and unresolved calls metadata
+        function_analyses = [cost.to_dict() for fid, cost in composer.computed_costs.items() if fid != "<module>"]
+        unresolved_calls = [c.to_dict() for c in call_graph.unresolved_calls]
+        analysis_complete = len(call_graph.unresolved_calls) == 0
 
         return AnalyzeResponse(
             success=(confidence != "UNSUPPORTED"),
@@ -77,6 +150,14 @@ class ComplexityAnalyzer:
             functions=[r.to_dict() for r in recurrence_relations],
             loops=[loop.to_dict() for loop in loops],
             recursion=recurrence_relations[0].to_dict() if recurrence_relations else {},
+            analysis_scope=scope,
+            analysis_target=target_name,
+            function_analyses=function_analyses,
+            analysis_complete=analysis_complete,
+            unresolved_calls=unresolved_calls,
+            unsupported_patterns=[],
+            limitations=chosen_cost.limitations,
+            call_graph=call_graph.to_dict(),
         )
 
     def _compute_complexities(

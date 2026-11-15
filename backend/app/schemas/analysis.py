@@ -108,5 +108,13 @@ class AnalyzeResponse(BaseModel):
     functions: List[Dict[str, Any]] = Field(default_factory=list)
     loops: List[Dict[str, Any]] = Field(default_factory=list)
     recursion: Dict[str, Any] = Field(default_factory=dict)
+    analysis_scope: str = "module"  # "module", "function", "function_collection"
+    analysis_target: Optional[str] = None
+    function_analyses: List[Dict[str, Any]] = Field(default_factory=list)
+    analysis_complete: bool = True
+    unresolved_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    unsupported_patterns: List[str] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
+    call_graph: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[SyntaxErrorInfo] = None
     submission_id: Optional[str] = None

@@ -11,6 +11,9 @@ interface ComplexityOverviewProps {
   spaceBreakdown?: SpaceBreakdown;
   confidence: "HIGH" | "MEDIUM" | "LOW" | "UNSUPPORTED";
   maxNesting: number;
+  analysisScope?: "module" | "function" | "function_collection";
+  analysisTarget?: string;
+  analysisComplete?: boolean;
 }
 
 export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
@@ -20,6 +23,9 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
   spaceBreakdown,
   confidence,
   maxNesting,
+  analysisScope,
+  analysisTarget,
+  analysisComplete = true,
 }) => {
   // Helper for color coding Big-O
   const getTimeColor = (comp: string) => {
@@ -202,12 +208,23 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
         </div>
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between">
+            <span className="text-xs text-zinc-400">Analysis Scope:</span>
+            <span className="text-xs font-medium text-zinc-200">
+              {analysisScope === "module" && "Module Scope"}
+              {analysisScope === "function" && (analysisTarget ? `Function (${analysisTarget})` : "Function Scope")}
+              {analysisScope === "function_collection" && (analysisTarget ? `Dominant: ${analysisTarget}` : "Function Collection")}
+              {!analysisScope && "AST Static Scope"}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between">
             <span className="text-xs text-zinc-400">Max Nesting Depth:</span>
             <span className="text-sm font-mono font-bold text-zinc-200">{maxNesting} levels</span>
           </div>
           <div className="flex items-baseline justify-between">
-            <span className="text-xs text-zinc-400">Inference Mode:</span>
-            <span className="text-xs font-medium text-emerald-400">AST Control-Flow Recurrence</span>
+            <span className="text-xs text-zinc-400">Analysis Status:</span>
+            <span className={`text-xs font-medium ${analysisComplete ? "text-emerald-400" : "text-amber-400"}`}>
+              {analysisComplete ? "Complete AST Derivation" : "Incomplete (Conservative Bound)"}
+            </span>
           </div>
         </div>
       </div>

@@ -62,6 +62,12 @@ export interface TheoreticalGraphData {
   disclaimer: string;
 }
 
+export interface UnresolvedCallInfo {
+  callee_name: string;
+  line_number: number;
+  reason: string;
+}
+
 export interface AnalyzeResponse {
   success: boolean;
   time_complexity: string;
@@ -80,6 +86,14 @@ export interface AnalyzeResponse {
   functions: Record<string, any>[];
   loops: Record<string, any>[];
   recursion: Record<string, any>;
+  analysis_scope?: "module" | "function" | "function_collection";
+  analysis_target?: string;
+  function_analyses?: Record<string, any>[];
+  analysis_complete?: boolean;
+  unresolved_calls?: UnresolvedCallInfo[];
+  unsupported_patterns?: string[];
+  limitations?: string[];
+  call_graph?: Record<string, any>;
   error?: SyntaxErrorInfo;
   submission_id?: string;
 }

@@ -216,6 +216,9 @@ export default function Home() {
                 spaceBreakdown={analysisResult.space_breakdown}
                 confidence={analysisResult.confidence}
                 maxNesting={analysisResult.statistics.max_nesting_depth}
+                analysisScope={analysisResult.analysis_scope}
+                analysisTarget={analysisResult.analysis_target}
+                analysisComplete={analysisResult.analysis_complete}
               />
 
               {/* 2. Analysis Statistics */}
@@ -274,6 +277,8 @@ export default function Home() {
                 optimizationSuggestions={analysisResult.optimization_suggestions}
                 recurrence={analysisResult.recurrence}
                 confidenceReasons={analysisResult.confidence_reasons}
+                limitations={analysisResult.limitations}
+                unresolvedCalls={analysisResult.unresolved_calls}
               />
             </div>
           )}

@@ -1,8 +1,8 @@
 "use client";
 
 import React from "react";
-import { HelpCircle, CheckCircle2, Lightbulb, AlertCircle, GitBranch, Sigma } from "lucide-react";
-import { RecurrenceInfo } from "@/types/analysis";
+import { HelpCircle, CheckCircle2, Lightbulb, AlertCircle, GitBranch, Sigma, AlertTriangle } from "lucide-react";
+import { RecurrenceInfo, UnresolvedCallInfo } from "@/types/analysis";
 
 interface ReasoningPanelProps {
   timeComplexity: string;
@@ -12,6 +12,8 @@ interface ReasoningPanelProps {
   optimizationSuggestions: string[];
   recurrence?: RecurrenceInfo;
   confidenceReasons?: string[];
+  limitations?: string[];
+  unresolvedCalls?: UnresolvedCallInfo[];
 }
 
 export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
@@ -22,6 +24,8 @@ export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
   optimizationSuggestions,
   recurrence,
   confidenceReasons,
+  limitations,
+  unresolvedCalls,
 }) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -104,6 +108,30 @@ export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
               </div>
             ))}
           </div>
+
+          {((limitations && limitations.length > 0) || (unresolvedCalls && unresolvedCalls.length > 0)) && (
+            <div className="mt-3 pt-2.5 border-t border-zinc-800/80 space-y-1.5">
+              <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                Static Analysis Disclosures & Limitations
+              </div>
+              {limitations?.map((lim, idx) => (
+                <div key={`lim-${idx}`} className="flex items-start gap-1.5 text-[11px] text-amber-300/90 leading-tight">
+                  <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />
+                  <span>{lim}</span>
+                </div>
+              ))}
+              {unresolvedCalls && unresolvedCalls.length > 0 && (
+                <div className="text-[11px] text-zinc-400 leading-tight">
+                  <span className="text-zinc-300 font-semibold">Unresolved Calls: </span>
+                  {unresolvedCalls.map((uc, idx) => (
+                    <span key={`uc-${idx}`} className="font-mono text-[10px] text-zinc-300 bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800 mr-1">
+                      {uc.callee_name}() [L{uc.line_number}: {uc.reason}]
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

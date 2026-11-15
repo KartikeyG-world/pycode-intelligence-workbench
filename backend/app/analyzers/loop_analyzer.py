@@ -60,6 +60,27 @@ class LoopInfo:
             "children": [child.to_dict() for child in self.children],
         }
 
+    def compute_tree_complexity(self) -> Any:
+        """Calculates the combined asymptotic complexity of this loop and all nested children."""
+        from app.analyzers.complexity_classes import ComplexityClass
+
+        base_class = ComplexityClass.from_big_o(self.complexity_class)
+        if not self.children:
+            return base_class
+
+        max_child_class = ComplexityClass.constant()
+        for child in self.children:
+            ch_class = child.compute_tree_complexity()
+            max_child_class = ComplexityClass.dominant_of(max_child_class, ch_class)
+
+        first_child = self.children[0]
+        if first_child.is_dependent_on_outer:
+            if first_child.dependent_degree == 2.0:
+                return ComplexityClass.polynomial(3.0)
+            return ComplexityClass.polynomial(2.0)
+
+        return ComplexityClass.multiply(base_class, max_child_class)
+
 
 class LoopAnalyzer:
     """Analyzes loops in Python AST to determine individual, dependent, and nested asymptotic complexity."""

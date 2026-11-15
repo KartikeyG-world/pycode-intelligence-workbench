@@ -68,7 +68,7 @@ class RecursionAnalyzer:
 
         # 5. Analyze argument transformations across recursive calls
         reduction_type, step_size = self._analyze_argument_transformations(
-            func_node, recursive_calls, param_names
+            func_node, recursive_calls, param_names, worst_case_branches
         )
 
         if in_loop:
@@ -198,15 +198,34 @@ class RecursionAnalyzer:
         return False, None
 
     def _analyze_argument_transformations(
-        self, func_node: ast.FunctionDef, recursive_calls: List[ast.Call], param_names: List[str]
+        self, func_node: ast.FunctionDef, recursive_calls: List[ast.Call], param_names: List[str], worst_case_branches: int = 1
     ) -> Tuple[str, float]:
         is_halving = False
         is_subtraction = False
         is_addition_to_bound = False
         step = 1.0
 
+        # Detect local variables assigned from halving expressions (e.g. mid = (low + high) // 2)
+        halving_vars: Set[str] = set()
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Assign):
+                if isinstance(node.value, ast.BinOp) and isinstance(node.value.op, (ast.FloorDiv, ast.Div, ast.RShift)):
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            halving_vars.add(t.id)
+                elif isinstance(node.value, ast.Name) and "mid" in node.value.id.lower():
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            halving_vars.add(t.id)
+
         for call in recursive_calls:
             for idx, arg in enumerate(call.args):
+                # Check for halving variable in argument (e.g. mid - 1, mid + 1, mid)
+                for n in ast.walk(arg):
+                    if isinstance(n, ast.Name) and (n.id in halving_vars or "mid" in n.id.lower()):
+                        is_halving = True
+                        step = 2.0
+
                 # Halving: n // 2, n / 2, mid - 1
                 if isinstance(arg, ast.BinOp):
                     if isinstance(arg.op, (ast.FloorDiv, ast.Div, ast.RShift)):
@@ -227,7 +246,7 @@ class RecursionAnalyzer:
                     is_slice_half = False
                     for slice_bound in (sl.lower, sl.upper):
                         if slice_bound is not None:
-                            if isinstance(slice_bound, ast.Name) and "mid" in slice_bound.id.lower():
+                            if isinstance(slice_bound, ast.Name) and ("mid" in slice_bound.id.lower() or slice_bound.id in halving_vars):
                                 is_slice_half = True
                             elif isinstance(slice_bound, ast.BinOp) and isinstance(slice_bound.op, (ast.FloorDiv, ast.Div, ast.RShift)):
                                 is_slice_half = True
@@ -239,7 +258,7 @@ class RecursionAnalyzer:
                         is_subtraction = True
                         step = 1.0
 
-        # Check for multi-term decrement like fib(n-1) + fib(n-2)
+        # Check for multi-term decrement like fib(n-1) + fib(n-2) along the SAME execution path
         distinct_steps: Set[float] = set()
         for call in recursive_calls:
             for arg in call.args:
@@ -247,7 +266,7 @@ class RecursionAnalyzer:
                     if isinstance(arg.right, ast.Constant) and isinstance(arg.right.value, (int, float)):
                         distinct_steps.add(float(arg.right.value))
 
-        if len(distinct_steps) >= 2 and 1.0 in distinct_steps and 2.0 in distinct_steps:
+        if worst_case_branches > 1 and len(distinct_steps) >= 2 and 1.0 in distinct_steps and 2.0 in distinct_steps:
             return "multi_term", 1.0
 
         if is_halving:
@@ -287,11 +306,13 @@ class RecursionAnalyzer:
 
     def _inspect_local_work(self, func_node: ast.FunctionDef) -> ComplexityClass:
         """Inspects non-recursive work per execution frame (e.g. loops or slicing)."""
-        has_loop = False
-        for child in ast.iter_child_nodes(func_node):
-            if isinstance(child, (ast.For, ast.While)):
-                has_loop = True
+        from app.analyzers.loop_analyzer import LoopAnalyzer
+        loops = LoopAnalyzer().analyze(func_node, skip_nested_functions=True)
+        if not loops:
+            return ComplexityClass.constant()
 
-        if has_loop:
-            return ComplexityClass.linear("n")
-        return ComplexityClass.constant()
+        max_class = ComplexityClass.constant()
+        for loop in loops:
+            c = loop.compute_tree_complexity()
+            max_class = ComplexityClass.dominant_of(max_class, c)
+        return max_class

@@ -107,6 +107,9 @@ export default function Home() {
         functions: [],
         loops: [],
         recursion: {},
+        analysis_scope: "legacy_unknown",
+        analysis_complete: null,
+        analysis_status: "LEGACY_RECORD",
         submission_id: detail.submission_id,
       });
     } catch (err: any) {
@@ -219,6 +222,7 @@ export default function Home() {
                 analysisScope={analysisResult.analysis_scope}
                 analysisTarget={analysisResult.analysis_target}
                 analysisComplete={analysisResult.analysis_complete}
+                analysisStatus={analysisResult.analysis_status}
               />
 
               {/* 2. Analysis Statistics */}

@@ -108,10 +108,14 @@ class AnalyzeResponse(BaseModel):
     functions: List[Dict[str, Any]] = Field(default_factory=list)
     loops: List[Dict[str, Any]] = Field(default_factory=list)
     recursion: Dict[str, Any] = Field(default_factory=dict)
-    analysis_scope: str = "module"  # "module", "function", "function_collection"
+    analysis_scope: Optional[str] = None  # "module", "function", "function_collection", "legacy_unknown"
     analysis_target: Optional[str] = None
     function_analyses: List[Dict[str, Any]] = Field(default_factory=list)
-    analysis_complete: bool = True
+    call_graph_complete: Optional[bool] = None
+    cost_model_complete: Optional[bool] = None
+    analysis_complete: Optional[bool] = None
+    analysis_status: Optional[str] = None  # "COMPLETE", "PARTIAL", "UNSUPPORTED", "LEGACY_RECORD"
+    analysis_schema_version: str = "1.1"
     unresolved_calls: List[Dict[str, Any]] = Field(default_factory=list)
     unsupported_patterns: List[str] = Field(default_factory=list)
     limitations: List[str] = Field(default_factory=list)

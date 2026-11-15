@@ -17,9 +17,13 @@ class CallSite:
         loop_depth: int = 0,
         enclosing_loop_id: Optional[str] = None,
         arg_descriptions: Optional[List[str]] = None,
+        arg_classifications: Optional[List[Dict[str, Any]]] = None,
         is_resolved: bool = True,
         unresolved_reason: Optional[str] = None,
         call_node: Optional[ast.Call] = None,
+        is_awaited: bool = False,
+        is_consumed_generator: bool = False,
+        is_builtin: bool = False,
     ):
         self.caller_id = caller_id
         self.callee_id = callee_id
@@ -30,9 +34,13 @@ class CallSite:
         self.loop_depth = loop_depth
         self.enclosing_loop_id = enclosing_loop_id
         self.arg_descriptions = arg_descriptions or []
+        self.arg_classifications = arg_classifications or []
         self.is_resolved = is_resolved
         self.unresolved_reason = unresolved_reason
         self.call_node = call_node
+        self.is_awaited = is_awaited
+        self.is_consumed_generator = is_consumed_generator
+        self.is_builtin = is_builtin
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -46,6 +54,10 @@ class CallSite:
             "is_resolved": self.is_resolved,
             "unresolved_reason": self.unresolved_reason,
             "args": self.arg_descriptions,
+            "arg_classifications": self.arg_classifications,
+            "is_awaited": self.is_awaited,
+            "is_consumed_generator": self.is_consumed_generator,
+            "is_builtin": self.is_builtin,
         }
 
 
@@ -107,10 +119,21 @@ class CallGraph:
     def _extract_calls_from_scope(self, caller_id: str, statements: List[ast.stmt]):
         """Walks statements within a function or module scope, tracking loop nesting and call sites."""
         loop_stack: List[ast.AST] = []
+        parent_stack: List[ast.AST] = []
+
+        caller_info = self.index.functions.get(caller_id)
+        caller_params = set(caller_info.parameters) if caller_info else set()
 
         class ScopeCallVisitor(ast.NodeVisitor):
             def __init__(self, outer: "CallGraph"):
                 self.outer = outer
+
+            def visit(self, node: ast.AST):
+                parent_stack.append(node)
+                try:
+                    super().visit(node)
+                finally:
+                    parent_stack.pop()
 
             def visit_For(self, node: ast.For):
                 loop_stack.append(node)
@@ -136,10 +159,60 @@ class CallGraph:
                 callee_info, unresolved_reason = self.outer.index.resolve_call(caller_id, node)
                 callee_name = self.outer._extract_callee_name(node.func)
 
-                is_in_loop = len(loop_stack) > 0
-                loop_depth = len(loop_stack)
-                enclosing_loop_id = f"loop@{loop_stack[-1].lineno}" if loop_stack else None
+                # Check if this call is the iterator expression of the innermost loop
+                is_in_iter_header = False
+                if loop_stack and isinstance(loop_stack[-1], ast.For):
+                    if loop_stack[-1].iter is node or any(n is node for n in ast.walk(loop_stack[-1].iter)):
+                        is_in_iter_header = True
+
+                effective_loop_stack = loop_stack[:-1] if is_in_iter_header else loop_stack
+                is_in_loop = len(effective_loop_stack) > 0
+                loop_depth = len(effective_loop_stack)
+                enclosing_loop_id = f"loop@{effective_loop_stack[-1].lineno}" if effective_loop_stack else None
+
+                # Extract loop iteration variables and bound variables
+                active_loop_vars: Set[str] = set()
+                enclosing_loop_bound_vars: Set[str] = set()
+                for loop in effective_loop_stack:
+                    if isinstance(loop, ast.For):
+                        if isinstance(loop.target, ast.Name):
+                            active_loop_vars.add(loop.target.id)
+                        elif isinstance(loop.target, ast.Tuple):
+                            for elt in loop.target.elts:
+                                if isinstance(elt, ast.Name):
+                                    active_loop_vars.add(elt.id)
+                        for n in ast.walk(loop.iter):
+                            if isinstance(n, ast.Name):
+                                enclosing_loop_bound_vars.add(n.id)
+                    elif isinstance(loop, ast.While):
+                        for n in ast.walk(loop.test):
+                            if isinstance(n, ast.Name):
+                                enclosing_loop_bound_vars.add(n.id)
+
                 arg_descs = [self.outer._describe_argument(a) for a in node.args]
+                arg_classifications = self.outer._classify_call_arguments(
+                    node.args, caller_params, active_loop_vars, enclosing_loop_bound_vars
+                )
+
+                # Check if call is directly awaited
+                is_awaited = False
+                if len(parent_stack) >= 2 and isinstance(parent_stack[-2], ast.Await):
+                    is_awaited = True
+
+                # Check if generator is consumed
+                is_consumed = False
+                if len(parent_stack) >= 2:
+                    direct_p = parent_stack[-2]
+                    if isinstance(direct_p, ast.For) and direct_p.iter is node:
+                        is_consumed = True
+                    elif isinstance(direct_p, ast.Call) and isinstance(direct_p.func, ast.Name):
+                        if direct_p.func.id in ("list", "set", "tuple", "sum", "iter", "next", "sorted", "enumerate", "zip"):
+                            is_consumed = True
+                for p in parent_stack[:-1]:
+                    if isinstance(p, ast.comprehension) and p.iter is node:
+                        is_consumed = True
+
+                is_builtin = bool(unresolved_reason and unresolved_reason.startswith("builtin:"))
 
                 if callee_info is not None:
                     callee_id = callee_info.func_id
@@ -153,8 +226,12 @@ class CallGraph:
                         loop_depth=loop_depth,
                         enclosing_loop_id=enclosing_loop_id,
                         arg_descriptions=arg_descs,
+                        arg_classifications=arg_classifications,
                         is_resolved=True,
                         call_node=node,
+                        is_awaited=is_awaited,
+                        is_consumed_generator=is_consumed,
+                        is_builtin=False,
                     )
                     self.outer.call_sites.append(site)
                     self.outer.adj_list.setdefault(caller_id, set()).add(callee_id)
@@ -171,12 +248,18 @@ class CallGraph:
                         loop_depth=loop_depth,
                         enclosing_loop_id=enclosing_loop_id,
                         arg_descriptions=arg_descs,
+                        arg_classifications=arg_classifications,
                         is_resolved=False,
                         unresolved_reason=unresolved_reason,
                         call_node=node,
+                        is_awaited=is_awaited,
+                        is_consumed_generator=is_consumed,
+                        is_builtin=is_builtin,
                     )
                     self.outer.call_sites.append(site)
-                    self.outer.unresolved_calls.append(site)
+                    # Only register true unresolved external calls without cost models
+                    if not is_builtin:
+                        self.outer.unresolved_calls.append(site)
                     self.outer.index.functions[caller_id].call_sites.append(site)
 
                 self.generic_visit(node)
@@ -184,6 +267,46 @@ class CallGraph:
         visitor = ScopeCallVisitor(self)
         for stmt in statements:
             visitor.visit(stmt)
+
+    def _classify_call_arguments(
+        self,
+        args: List[ast.AST],
+        caller_params: Set[str],
+        active_loop_vars: Set[str],
+        enclosing_loop_bound_vars: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        enclosing_loop_bound_vars = enclosing_loop_bound_vars or set()
+        classifications: List[Dict[str, Any]] = []
+        for a in args:
+            if isinstance(a, ast.Constant):
+                classifications.append({"category": "CONSTANT", "detail": str(a.value)})
+            elif isinstance(a, ast.Name):
+                if a.id in active_loop_vars:
+                    classifications.append({"category": "LOOP_VARIABLE_SIZE", "detail": a.id})
+                elif a.id in caller_params:
+                    if enclosing_loop_bound_vars and a.id not in enclosing_loop_bound_vars:
+                        classifications.append({"category": "INDEPENDENT_INPUT_SIZE", "detail": a.id})
+                    else:
+                        classifications.append({"category": "SAME_INPUT_SIZE", "detail": a.id})
+                else:
+                    classifications.append({"category": "COLLECTION_ALIAS", "detail": a.id})
+            elif isinstance(a, ast.Subscript) and isinstance(a.slice, ast.Slice):
+                slice_vars = {n.id for n in ast.walk(a.slice) if isinstance(n, ast.Name)}
+                if slice_vars & active_loop_vars:
+                    classifications.append({"category": "LOOP_VARIABLE_SIZE", "detail": "slice_with_loop_var"})
+                else:
+                    classifications.append({"category": "COLLECTION_SLICE", "detail": "slice"})
+            elif isinstance(a, ast.BinOp):
+                bin_vars = {n.id for n in ast.walk(a) if isinstance(n, ast.Name)}
+                if bin_vars & active_loop_vars:
+                    classifications.append({"category": "LOOP_VARIABLE_SIZE", "detail": "binop_loop_var"})
+                elif bin_vars & caller_params:
+                    classifications.append({"category": "DERIVED_SYMBOLIC_SIZE", "detail": "binop_caller_param"})
+                else:
+                    classifications.append({"category": "UNKNOWN", "detail": "binop_unknown"})
+            else:
+                classifications.append({"category": "UNKNOWN", "detail": "complex_expr"})
+        return classifications
 
     def _extract_callee_name(self, func_node: ast.AST) -> str:
         if isinstance(func_node, ast.Name):

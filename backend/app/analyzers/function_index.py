@@ -10,7 +10,7 @@ class FunctionInfo:
         func_id: str,
         name: str,
         qualified_name: str,
-        func_type: str,  # "module", "function", "async_function", "method", "static_method", "class_method"
+        func_type: str,  # "module", "function", "generator", "async_function", "async_generator", "method", "static_method", "class_method"
         node: ast.AST,
         lineno: int = 1,
         end_lineno: int = 1,
@@ -20,6 +20,10 @@ class FunctionInfo:
         parameters: Optional[List[str]] = None,
         param_annotations: Optional[Dict[str, str]] = None,
         decorators: Optional[List[str]] = None,
+        is_generator: bool = False,
+        is_async: bool = False,
+        is_async_generator: bool = False,
+        has_unknown_decorator: bool = False,
     ):
         self.func_id = func_id
         self.name = name
@@ -34,6 +38,10 @@ class FunctionInfo:
         self.parameters = parameters or []
         self.param_annotations = param_annotations or {}
         self.decorators = decorators or []
+        self.is_generator = is_generator
+        self.is_async = is_async
+        self.is_async_generator = is_async_generator
+        self.has_unknown_decorator = has_unknown_decorator
         self.local_variables: Set[str] = set()
         self.shadowed_names: Set[str] = set()
         self.is_recursive: bool = False
@@ -50,6 +58,10 @@ class FunctionInfo:
             "parent_scope_id": self.parent_scope_id,
             "parameters": self.parameters,
             "decorators": self.decorators,
+            "is_generator": self.is_generator,
+            "is_async": self.is_async,
+            "is_async_generator": self.is_async_generator,
+            "has_unknown_decorator": self.has_unknown_decorator,
             "is_recursive": self.is_recursive,
         }
 
@@ -143,6 +155,17 @@ class FunctionIndex:
             return True
         return False
 
+    @staticmethod
+    def _has_yield_in_scope(node: ast.AST) -> bool:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(child, (ast.Yield, ast.YieldFrom)):
+                return True
+            if FunctionIndex._has_yield_in_scope(child):
+                return True
+        return False
+
     def _index_scope(
         self,
         body: List[ast.stmt],
@@ -150,14 +173,34 @@ class FunctionIndex:
         parent_qualname: str,
         parent_scope_type: str,
     ):
+        SAFE_DECORATORS = {"staticmethod", "classmethod", "property", "cache", "lru_cache"}
+
         for stmt in body:
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 func_name = stmt.name
                 qualname = f"{parent_qualname}.{func_name}" if parent_qualname else func_name
                 func_id = f"{qualname}@{stmt.lineno}"
 
-                # Determine function type
-                func_type = "async_function" if isinstance(stmt, ast.AsyncFunctionDef) else "function"
+                # Detect deferred generators, async functions, and async generators
+                has_yield = self._has_yield_in_scope(stmt)
+                is_generator = False
+                is_async = False
+                is_async_generator = False
+
+                if isinstance(stmt, ast.AsyncFunctionDef):
+                    if has_yield:
+                        func_type = "async_generator"
+                        is_async_generator = True
+                    else:
+                        func_type = "async_function"
+                        is_async = True
+                else:
+                    if has_yield:
+                        func_type = "generator"
+                        is_generator = True
+                    else:
+                        func_type = "function"
+
                 decorators: List[str] = []
                 for dec in stmt.decorator_list:
                     if isinstance(dec, ast.Name):
@@ -170,12 +213,14 @@ class FunctionIndex:
                         elif isinstance(dec.func, ast.Attribute):
                             decorators.append(dec.func.attr)
 
+                has_unknown_dec = bool(any(d not in SAFE_DECORATORS for d in decorators))
+
                 if parent_scope_type == "class":
                     if "staticmethod" in decorators:
                         func_type = "static_method"
                     elif "classmethod" in decorators:
                         func_type = "class_method"
-                    else:
+                    elif not (is_generator or is_async or is_async_generator):
                         func_type = "method"
 
                 params = [arg.arg for arg in stmt.args.args]
@@ -198,6 +243,10 @@ class FunctionIndex:
                     parameters=params,
                     param_annotations=param_annotations,
                     decorators=decorators,
+                    is_generator=is_generator,
+                    is_async=is_async,
+                    is_async_generator=is_async_generator,
+                    has_unknown_decorator=has_unknown_dec,
                 )
                 self.functions[func_id] = func_info
 

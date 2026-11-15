@@ -130,7 +130,15 @@ class ComplexityAnalyzer:
         # 8. Function analyses and unresolved calls metadata
         function_analyses = [cost.to_dict() for fid, cost in composer.computed_costs.items() if fid != "<module>"]
         unresolved_calls = [c.to_dict() for c in call_graph.unresolved_calls]
-        analysis_complete = len(call_graph.unresolved_calls) == 0
+        call_graph_complete = len(call_graph.unresolved_calls) == 0
+        cost_model_complete = chosen_cost.cost_model_complete
+        analysis_complete = call_graph_complete and cost_model_complete and (confidence != "UNSUPPORTED")
+        if confidence == "UNSUPPORTED":
+            analysis_status = "UNSUPPORTED"
+        elif analysis_complete:
+            analysis_status = "COMPLETE"
+        else:
+            analysis_status = "PARTIAL"
 
         return AnalyzeResponse(
             success=(confidence != "UNSUPPORTED"),
@@ -153,7 +161,11 @@ class ComplexityAnalyzer:
             analysis_scope=scope,
             analysis_target=target_name,
             function_analyses=function_analyses,
+            call_graph_complete=call_graph_complete,
+            cost_model_complete=cost_model_complete,
             analysis_complete=analysis_complete,
+            analysis_status=analysis_status,
+            analysis_schema_version="1.1",
             unresolved_calls=unresolved_calls,
             unsupported_patterns=[],
             limitations=chosen_cost.limitations,

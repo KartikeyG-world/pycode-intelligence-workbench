@@ -12,6 +12,8 @@ class OperationReport:
         self.has_repeated_sort_in_loop: bool = False
         self.has_string_concat_in_loop: bool = False
         self.has_list_copy: bool = False
+        self.has_slice_in_loop: bool = False
+        self.has_copy_in_loop: bool = False
         self.detected_allocations: List[Dict[str, Any]] = []
         self.space_complexity_from_allocations: str = "O(1)"
         self.space_reasoning: List[str] = []
@@ -200,66 +202,8 @@ class OperationAnalyzer:
     ):
         env: Dict[str, str] = {}
 
-        def process_statement(stmt: ast.stmt, current_env: Dict[str, str]):
-            # Track variable types from assignments
-            if isinstance(stmt, ast.AnnAssign):
-                ann_type = LocalTypeInference.infer_annotation_type(stmt.annotation)
-                val_type = LocalTypeInference.infer_expr_type(stmt.value, current_env)
-                chosen = ann_type if ann_type != "unknown" else val_type
-                if isinstance(stmt.target, ast.Name):
-                    current_env[stmt.target.id] = chosen
-
-            elif isinstance(stmt, ast.Assign):
-                val_type = LocalTypeInference.infer_expr_type(stmt.value, current_env)
-                for t in stmt.targets:
-                    if isinstance(t, ast.Name):
-                        current_env[t.id] = val_type
-
-            elif isinstance(stmt, ast.AugAssign):
-                in_loop = id(stmt) in loop_nodes
-                lineno = getattr(stmt, "lineno", 0)
-
-                if in_loop and isinstance(stmt.op, ast.Add):
-                    target_name = stmt.target.id if isinstance(stmt.target, ast.Name) else None
-                    target_type = current_env.get(target_name, "unknown") if target_name else "unknown"
-                    val_type = LocalTypeInference.infer_expr_type(stmt.value, current_env)
-
-                    # Only flag string concatenation if variable or value is confirmed str
-                    if target_type == "str" or val_type == "str":
-                        report.has_string_concat_in_loop = True
-                        report.optimization_hints.append(
-                            f"Potential repeated string concatenation ('+=') inside a loop on line {lineno}. "
-                            "In Python, repeatedly appending to an immutable string can lead to repeated memory reallocation "
-                            "and copying (O(n²)); consider accumulating parts in a list and using ''.join(...) for linear O(n) performance."
-                        )
-
-            elif isinstance(stmt, ast.If):
-                # Process then and else branches with branching envs
-                then_env = current_env.copy()
-                for sub in stmt.body:
-                    process_statement(sub, then_env)
-
-                else_env = current_env.copy()
-                for sub in stmt.orelse:
-                    process_statement(sub, else_env)
-
-                # Merge envs conservatively
-                all_keys = set(then_env.keys()) | set(else_env.keys())
-                for k in all_keys:
-                    t1 = then_env.get(k, "unknown")
-                    t2 = else_env.get(k, "unknown")
-                    current_env[k] = t1 if t1 == t2 else "unknown"
-                return
-
-            elif isinstance(stmt, (ast.For, ast.While)):
-                for sub in stmt.body:
-                    process_statement(sub, current_env)
-                for sub in stmt.orelse:
-                    process_statement(sub, current_env)
-                return
-
-            # Check calls and operations within this statement
-            for child in ast.walk(stmt):
+        def inspect_node_operations(node: ast.AST, env_map: Dict[str, str]):
+            for child in ast.walk(node):
                 in_loop = id(child) in loop_nodes
                 lineno = getattr(child, "lineno", 0)
 
@@ -271,6 +215,8 @@ class OperationAnalyzer:
                         "line": lineno,
                         "in_loop": in_loop
                     })
+                    if in_loop:
+                        report.has_slice_in_loop = True
 
                 # List copying & sorting & inserts
                 elif isinstance(child, ast.Call):
@@ -282,6 +228,8 @@ class OperationAnalyzer:
 
                     if func_name in ("list", "copy"):
                         report.has_list_copy = True
+                        if in_loop:
+                            report.has_copy_in_loop = True
                         report.operations.append({
                             "name": "list_copy",
                             "cost": "O(n)",
@@ -315,6 +263,11 @@ class OperationAnalyzer:
                                     "consider using 'collections.deque' for O(1) appends to the left."
                                 )
 
+                    elif func_name == "copy" and isinstance(child.func, ast.Attribute):
+                        report.has_list_copy = True
+                        if in_loop:
+                            report.has_copy_in_loop = True
+
                     elif func_name in ("min", "max", "sum"):
                         report.operations.append({
                             "name": func_name,
@@ -325,21 +278,96 @@ class OperationAnalyzer:
 
                 # Membership test: 'x in lst'
                 elif isinstance(child, ast.Compare):
-                    for op in child.ops:
+                    for idx, op in enumerate(child.ops):
                         if isinstance(op, (ast.In, ast.NotIn)):
+                            comparator = child.comparators[idx] if idx < len(child.comparators) else None
+                            comp_type = LocalTypeInference.infer_expr_type(comparator, env_map)
+                            is_list_or_unknown = comp_type not in ("set", "dict")
+                            if isinstance(comparator, ast.Name):
+                                cname = comparator.id.lower()
+                                if "set" in cname or "dict" in cname or "map" in cname:
+                                    is_list_or_unknown = False
+
                             report.operations.append({
                                 "name": "membership",
-                                "cost": "O(n) for list, O(1) for set/dict",
+                                "cost": "O(1)" if not is_list_or_unknown else "O(n)",
                                 "line": lineno,
                                 "in_loop": in_loop
                             })
-                            if in_loop:
+                            if in_loop and is_list_or_unknown:
                                 report.has_linear_search_in_loop = True
                                 report.optimization_hints.append(
                                     f"Membership check ('in' operator) detected inside a loop on line {lineno}. "
                                     "If the container is a list, each check takes O(n), creating an O(n²) bottleneck. "
                                     "Consider converting the container to a 'set' or 'dict' for average O(1) lookups."
                                 )
+
+        def process_statement(stmt: ast.stmt, current_env: Dict[str, str]):
+            # Track variable types from assignments
+            if isinstance(stmt, ast.AnnAssign):
+                ann_type = LocalTypeInference.infer_annotation_type(stmt.annotation)
+                val_type = LocalTypeInference.infer_expr_type(stmt.value, current_env)
+                chosen = ann_type if ann_type != "unknown" else val_type
+                if isinstance(stmt.target, ast.Name):
+                    current_env[stmt.target.id] = chosen
+                inspect_node_operations(stmt, current_env)
+
+            elif isinstance(stmt, ast.Assign):
+                val_type = LocalTypeInference.infer_expr_type(stmt.value, current_env)
+                for t in stmt.targets:
+                    if isinstance(t, ast.Name):
+                        current_env[t.id] = val_type
+                inspect_node_operations(stmt, current_env)
+
+            elif isinstance(stmt, ast.AugAssign):
+                in_loop = id(stmt) in loop_nodes
+                lineno = getattr(stmt, "lineno", 0)
+
+                if in_loop and isinstance(stmt.op, ast.Add):
+                    target_name = stmt.target.id if isinstance(stmt.target, ast.Name) else None
+                    target_type = current_env.get(target_name, "unknown") if target_name else "unknown"
+                    val_type = LocalTypeInference.infer_expr_type(stmt.value, current_env)
+
+                    # Only flag string concatenation if variable or value is confirmed str
+                    if target_type == "str" or val_type == "str":
+                        report.has_string_concat_in_loop = True
+                        report.optimization_hints.append(
+                            f"Potential repeated string concatenation ('+=') inside a loop on line {lineno}. "
+                            "In Python, repeatedly appending to an immutable string can lead to repeated memory reallocation "
+                            "and copying (O(n²)); consider accumulating parts in a list and using ''.join(...) for linear O(n) performance."
+                        )
+                inspect_node_operations(stmt, current_env)
+
+            elif isinstance(stmt, ast.If):
+                inspect_node_operations(stmt.test, current_env)
+                # Process then and else branches with branching envs
+                then_env = current_env.copy()
+                for sub in stmt.body:
+                    process_statement(sub, then_env)
+
+                else_env = current_env.copy()
+                for sub in stmt.orelse:
+                    process_statement(sub, else_env)
+
+                # Merge envs conservatively
+                all_keys = set(then_env.keys()) | set(else_env.keys())
+                for k in all_keys:
+                    t1 = then_env.get(k, "unknown")
+                    t2 = else_env.get(k, "unknown")
+                    current_env[k] = t1 if t1 == t2 else "unknown"
+
+            elif isinstance(stmt, (ast.For, ast.While)):
+                if isinstance(stmt, ast.For):
+                    inspect_node_operations(stmt.iter, current_env)
+                elif isinstance(stmt, ast.While):
+                    inspect_node_operations(stmt.test, current_env)
+                for sub in stmt.body:
+                    process_statement(sub, current_env)
+                for sub in stmt.orelse:
+                    process_statement(sub, current_env)
+
+            else:
+                inspect_node_operations(stmt, current_env)
 
         for stmt in statements:
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

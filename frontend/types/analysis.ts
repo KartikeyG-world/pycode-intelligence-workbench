@@ -86,10 +86,14 @@ export interface AnalyzeResponse {
   functions: Record<string, any>[];
   loops: Record<string, any>[];
   recursion: Record<string, any>;
-  analysis_scope?: "module" | "function" | "function_collection";
-  analysis_target?: string;
+  analysis_scope?: "module" | "function" | "function_collection" | "legacy_unknown" | null;
+  analysis_target?: string | null;
   function_analyses?: Record<string, any>[];
-  analysis_complete?: boolean;
+  call_graph_complete?: boolean | null;
+  cost_model_complete?: boolean | null;
+  analysis_complete?: boolean | null;
+  analysis_status?: "COMPLETE" | "PARTIAL" | "UNSUPPORTED" | "LEGACY_RECORD" | null;
+  analysis_schema_version?: string;
   unresolved_calls?: UnresolvedCallInfo[];
   unsupported_patterns?: string[];
   limitations?: string[];

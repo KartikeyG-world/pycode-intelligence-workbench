@@ -11,9 +11,10 @@ interface ComplexityOverviewProps {
   spaceBreakdown?: SpaceBreakdown;
   confidence: "HIGH" | "MEDIUM" | "LOW" | "UNSUPPORTED";
   maxNesting: number;
-  analysisScope?: "module" | "function" | "function_collection";
-  analysisTarget?: string;
-  analysisComplete?: boolean;
+  analysisScope?: "module" | "function" | "function_collection" | "legacy_unknown" | null;
+  analysisTarget?: string | null;
+  analysisComplete?: boolean | null;
+  analysisStatus?: "COMPLETE" | "PARTIAL" | "UNSUPPORTED" | "LEGACY_RECORD" | null;
 }
 
 export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
@@ -25,7 +26,8 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
   maxNesting,
   analysisScope,
   analysisTarget,
-  analysisComplete = true,
+  analysisComplete = null,
+  analysisStatus = null,
 }) => {
   // Helper for color coding Big-O
   const getTimeColor = (comp: string) => {
@@ -222,8 +224,23 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-xs text-zinc-400">Analysis Status:</span>
-            <span className={`text-xs font-medium ${analysisComplete ? "text-emerald-400" : "text-amber-400"}`}>
-              {analysisComplete ? "Complete AST Derivation" : "Incomplete (Conservative Bound)"}
+            <span
+              className={`text-xs font-medium ${
+                analysisStatus === "COMPLETE"
+                  ? "text-emerald-400"
+                  : analysisStatus === "LEGACY_RECORD" || analysisComplete === null
+                  ? "text-zinc-400 font-mono"
+                  : analysisStatus === "UNSUPPORTED"
+                  ? "text-rose-400"
+                  : "text-amber-400"
+              }`}
+            >
+              {analysisStatus === "COMPLETE" && "Complete AST Derivation"}
+              {analysisStatus === "PARTIAL" && "Incomplete (Conservative Bound)"}
+              {analysisStatus === "UNSUPPORTED" && "Unsupported Model"}
+              {(analysisStatus === "LEGACY_RECORD" || (!analysisStatus && analysisComplete === null)) && "Legacy Analysis (Pre-Phase 1A)"}
+              {!analysisStatus && analysisComplete === true && "Complete AST Derivation"}
+              {!analysisStatus && analysisComplete === false && "Incomplete (Conservative Bound)"}
             </span>
           </div>
         </div>

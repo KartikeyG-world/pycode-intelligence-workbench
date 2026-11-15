@@ -30,9 +30,8 @@ addopts = "-v --strict-markers"
 faulthandler_timeout = 30
 faulthandler_exit_on_timeout = true
 filterwarnings = [
-    "ignore:.*httpx.*:DeprecationWarning",
-    "ignore:.*testclient.*:DeprecationWarning",
-    "ignore:.*httpx.*:",
+    # Narrowly target upstream Starlette/FastAPI deprecation warning regarding httpx transition
+    "ignore:.*Using `httpx` with `starlette\\.testclient` is deprecated.*:starlette.exceptions.StarletteDeprecationWarning",
 ]
 
 [tool.setuptools.packages.find]

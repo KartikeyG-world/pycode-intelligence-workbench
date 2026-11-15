@@ -25,8 +25,12 @@ ENV/
 .coverage
 htmlcov/
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.sqlite3
 complexity.db
+test_complexity.db*
 
 # Node & Next.js
 frontend/node_modules/

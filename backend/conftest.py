@@ -1,11 +1,15 @@
 import os
 import sys
+import uuid
 import socket
 import pytest
 
 # 1. Deterministic isolated test database configuration
-# Set DATABASE_URL before importing application settings or database modules
-TEST_DB_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "test_complexity.db"))
+# Generate a unique session-specific test database file to guarantee zero collision across concurrent pytest runs
+_SESSION_ID = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
+TEST_DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".test_dbs"))
+os.makedirs(TEST_DB_DIR, exist_ok=True)
+TEST_DB_FILE = os.path.abspath(os.path.join(TEST_DB_DIR, f"test_{_SESSION_ID}.db"))
 os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_FILE}"
 
 # Safeguard Windows socketpair against indefinite accept() blocking
@@ -70,14 +74,58 @@ from app.main import app
 from fastapi.testclient import TestClient
 
 
-def _clean_test_db_files():
-    """Remove test database file and any related SQLite journal / WAL / SHM files."""
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process with the given PID is currently active."""
+    if pid <= 0:
+        return False
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if h:
+                ctypes.windll.kernel32.CloseHandle(h)
+                return True
+            return False
+        else:
+            os.kill(pid, 0)
+            return True
+    except Exception:
+        return False
+
+
+def _clean_stale_test_dbs(test_db_dir: str):
+    """Clean up stale test databases from previously terminated or killed test runs."""
+    if not os.path.exists(test_db_dir):
+        return
+    current_pid = os.getpid()
+    for fname in os.listdir(test_db_dir):
+        if not fname.startswith("test_"):
+            continue
+        fpath = os.path.join(test_db_dir, fname)
+        # Parse PID from filename: test_{pid}_{uuid}.db...
+        parts = fname.split("_")
+        if len(parts) >= 2:
+            try:
+                file_pid = int(parts[1])
+                # If PID is not current process and is no longer alive, remove stale artifact
+                if file_pid != current_pid and not _is_pid_alive(file_pid):
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+            except ValueError:
+                pass
+
+
+def _clean_session_test_db(db_file: str):
+    """Remove session test database file and any related SQLite journal / WAL / SHM files."""
     try:
         engine.dispose()
     except Exception:
         pass
     for ext in ("", "-wal", "-shm", "-journal"):
-        path = f"{TEST_DB_FILE}{ext}"
+        path = f"{db_file}{ext}"
         if os.path.exists(path):
             try:
                 os.remove(path)
@@ -85,36 +133,85 @@ def _clean_test_db_files():
                 pass
 
 
+def verify_test_database_isolation(target_engine, expected_db_path: str, target_settings=None) -> None:
+    """Strictly validates that the SQLAlchemy engine is using the dedicated test SQLite database.
+    Rejects development database, PostgreSQL/Supabase, or any non-test configuration.
+    Uses canonical, normalized Windows paths for comparison. Never prints credentials or secrets.
+    """
+    # 1. Verify dialect is sqlite
+    if target_engine.dialect.name != "sqlite":
+        raise ValueError(
+            f"Database isolation violation: expected SQLite dialect, got '{target_engine.dialect.name}'"
+        )
+
+    # 2. Verify driver is pysqlite
+    if target_engine.driver != "pysqlite":
+        raise ValueError(
+            f"Database isolation violation: expected pysqlite driver, got '{target_engine.driver}'"
+        )
+
+    # 3. Reject external PostgreSQL / Supabase
+    url_str = str(target_engine.url).lower()
+    if "postgresql" in url_str:
+        raise ValueError("Database isolation violation: engine is connected to PostgreSQL/Supabase")
+
+    # 4. Verify resolved database file matches the exact expected test database path
+    raw_db = target_engine.url.database
+    if not raw_db:
+        raise ValueError("Database isolation violation: engine has no database file path")
+
+    norm_resolved = os.path.normcase(os.path.abspath(raw_db))
+    norm_expected = os.path.normcase(os.path.abspath(expected_db_path))
+
+    # 5. Explicitly reject development database: complexity.db
+    dev_db_file = os.path.normcase(os.path.abspath(os.path.join(os.path.dirname(__file__), "complexity.db")))
+    if norm_resolved == dev_db_file or norm_resolved.endswith(os.path.normcase(os.path.sep + "complexity.db")):
+        raise ValueError("Database isolation violation: engine is connected to development database complexity.db")
+
+    # 6. Verify resolved database matches expected test database path
+    if norm_resolved != norm_expected:
+        raise ValueError(
+            f"Database isolation violation: engine path does not match expected test database path"
+        )
+
+    # 7. Verify settings agree if provided
+    if target_settings is not None:
+        sett_url = str(target_settings.DATABASE_URL)
+        if norm_expected not in os.path.normcase(os.path.abspath(sett_url.replace("sqlite+pysqlite:///", ""))):
+            raise ValueError("Database isolation violation: settings.DATABASE_URL does not match engine path")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def setup_database():
     """Ensure isolated test database schema is created and cleaned up.
     Handles cleanup of pre-existing stale files from previously interrupted runs.
     """
-    # 1. Clean any stale database files left by interrupted runs
-    _clean_test_db_files()
+    # 1. Clean stale database files left by previously dead pytest processes
+    _clean_stale_test_dbs(TEST_DB_DIR)
 
     # 2. Strict isolation assertions: prevent accidental production/dev database contamination
-    db_url_str = str(engine.url)
-    assert "test_complexity.db" in db_url_str, (
-        f"Security violation: Tests must run against isolated test_complexity.db, got: {db_url_str}"
-    )
-    assert not db_url_str.startswith("postgresql"), (
-        f"Security violation: Tests must NEVER connect to external Supabase / PostgreSQL: {db_url_str}"
-    )
-    assert not (db_url_str.endswith("complexity.db") and not db_url_str.endswith("test_complexity.db")), (
-        f"Isolation violation: Tests must not connect to the development complexity.db: {db_url_str}"
-    )
+    verify_test_database_isolation(engine, TEST_DB_FILE, settings)
 
-    # 3. Create fresh schema
+    # 3. Create fresh schema in session-unique test database
     Base.metadata.create_all(bind=engine)
     yield
 
-    # 4. Teardown: drop tables, dispose engine, delete test database files
+    # 4. Teardown: drop tables, dispose engine, delete session test database files
     try:
         Base.metadata.drop_all(bind=engine)
     except Exception:
         pass
-    _clean_test_db_files()
+    _clean_session_test_db(TEST_DB_FILE)
+
+
+def _truncate_all_tables():
+    """Helper to cleanly truncate all tables in reverse topological foreign-key order."""
+    try:
+        with engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(table.delete())
+    except Exception:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -122,14 +219,9 @@ def clean_database_tables():
     """Per-test database table row isolation.
     Ensures each test function starts and ends with completely empty tables.
     """
+    _truncate_all_tables()
     yield
-    # Delete all rows after each test to prevent cross-test state leakage
-    try:
-        with engine.begin() as conn:
-            for table in reversed(Base.metadata.sorted_tables):
-                conn.execute(table.delete())
-    except Exception:
-        pass
+    _truncate_all_tables()
 
 
 @pytest.fixture

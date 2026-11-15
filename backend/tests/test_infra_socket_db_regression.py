@@ -2,9 +2,16 @@ import os
 import sys
 import socket
 import pytest
+from sqlalchemy import create_engine
 from app.db.database import engine, Base, SessionLocal
 from app.models.models import CodeSubmission, AnalysisResult
-from conftest import TEST_DB_FILE, _clean_test_db_files
+from conftest import (
+    TEST_DB_FILE,
+    TEST_DB_DIR,
+    verify_test_database_isolation,
+    _clean_session_test_db,
+    _clean_stale_test_dbs,
+)
 
 
 def test_socketpair_active_and_functional():
@@ -41,12 +48,29 @@ def test_timeout_guarded_socketpair_bounded_failure():
 
 def test_database_isolation_runtime_invariants():
     """Verify that tests execute exclusively against the dedicated isolated test SQLite database."""
-    url_str = str(engine.url)
-    assert "test_complexity.db" in url_str, f"Unexpected DB in engine: {url_str}"
-    assert not url_str.startswith("postgresql"), f"Automated tests must never target PostgreSQL: {url_str}"
-    assert not (url_str.endswith("complexity.db") and not url_str.endswith("test_complexity.db")), (
-        f"Automated tests must not target development complexity.db: {url_str}"
-    )
+    # Must pass without raising any ValueError
+    verify_test_database_isolation(engine, TEST_DB_FILE)
+
+
+def test_database_isolation_negative_rejection(tmp_path):
+    """Verify that verify_test_database_isolation rejects invalid, development, or external DB configurations."""
+    # Case 1: Rejects development database complexity.db
+    dev_db = os.path.abspath(os.path.join(os.path.dirname(TEST_DB_FILE), "..", "complexity.db"))
+    dev_engine = create_engine(f"sqlite+pysqlite:///{dev_db}")
+    with pytest.raises(ValueError, match="development database"):
+        verify_test_database_isolation(dev_engine, TEST_DB_FILE)
+
+    # Case 2: Rejects external PostgreSQL configuration
+    pg_engine = create_engine("sqlite+pysqlite:///:memory:")  # Create sqlite engine but mock URL check
+    pg_engine.url = pg_engine.url.set(drivername="postgresql+psycopg")
+    with pytest.raises(ValueError, match="PostgreSQL/Supabase|expected SQLite dialect"):
+        verify_test_database_isolation(pg_engine, TEST_DB_FILE)
+
+    # Case 3: Rejects mismatched database path
+    other_db = str(tmp_path / "other_database.db")
+    other_engine = create_engine(f"sqlite+pysqlite:///{other_db}")
+    with pytest.raises(ValueError, match="does not match expected"):
+        verify_test_database_isolation(other_engine, TEST_DB_FILE)
 
 
 def test_database_per_test_row_isolation_part_1():
@@ -78,16 +102,23 @@ def test_database_per_test_row_isolation_part_2():
 
 
 def test_stale_database_cleanup_handles_interrupted_runs(tmp_path):
-    """Verify that _clean_test_db_files removes .db, -wal, -shm, and -journal files left by interrupted runs."""
-    fake_db = str(tmp_path / "stale_test.db")
-    for ext in ("", "-wal", "-shm", "-journal"):
-        with open(f"{fake_db}{ext}", "w") as f:
-            f.write("stale_data")
-        assert os.path.exists(f"{fake_db}{ext}")
+    """Verify that stale test database cleanup removes files from dead PIDs."""
+    test_dir = str(tmp_path / "stale_dir")
+    os.makedirs(test_dir, exist_ok=True)
 
-    # Test file deletion logic
-    for ext in ("", "-wal", "-shm", "-journal"):
-        path = f"{fake_db}{ext}"
-        if os.path.exists(path):
-            os.remove(path)
-        assert not os.path.exists(f"{fake_db}{ext}")
+    # Create a fake test DB with a dead PID (e.g. 999999)
+    dead_pid_file = os.path.join(test_dir, "test_999999_deadbeef.db")
+    with open(dead_pid_file, "w") as f:
+        f.write("stale_db")
+    with open(f"{dead_pid_file}-wal", "w") as f:
+        f.write("stale_wal")
+
+    assert os.path.exists(dead_pid_file)
+    assert os.path.exists(f"{dead_pid_file}-wal")
+
+    # Clean stale files in test directory
+    _clean_stale_test_dbs(test_dir)
+
+    # Files associated with dead PID 999999 must have been removed
+    assert not os.path.exists(dead_pid_file)
+    assert not os.path.exists(f"{dead_pid_file}-wal")

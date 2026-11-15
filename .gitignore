@@ -1,0 +1,61 @@
+# Environment variables and secrets
+.env
+.env*.local
+.env.development
+.env.production
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+__pycache__ (1)/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+backend/venv (1)/
+venv/
+venv (1)/
+.venv/
+ENV/
+.pytest_cache/
+(1).pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.sqlite3
+complexity.db
+
+# Node & Next.js
+frontend/node_modules/
+frontend/node_modules (1)/
+node_modules/
+node_modules (1)/
+frontend/.next/
+frontend/(1).next/
+.next/
+(1).next/
+out/
+build/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Profiling and execution artifacts
+*.prof
+*.pstats
+*.memray
+profile_output/
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

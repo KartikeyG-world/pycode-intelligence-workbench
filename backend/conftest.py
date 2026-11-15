@@ -19,13 +19,13 @@ _orig_socketpair = getattr(socket, "socketpair", None)
 _orig_fallback_socketpair = getattr(socket, "_fallback_socketpair", None)
 
 if sys.platform == "win32" and _orig_fallback_socketpair is not None:
-    def _timeout_guarded_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
+    def _timeout_guarded_socketpair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0, *, timeout: float = 2.0):
         host = socket._LOCALHOST if family == socket.AF_INET else socket._LOCALHOST_V6
         lsock = socket.socket(family, type, proto)
         try:
             lsock.bind((host, 0))
             lsock.listen(1)
-            lsock.settimeout(2.0)  # Bound accept timeout to prevent indefinite hangs
+            lsock.settimeout(timeout)  # Bound accept timeout to prevent indefinite hangs
             addr, port = lsock.getsockname()[:2]
             csock = socket.socket(family, type, proto)
             try:
@@ -41,7 +41,7 @@ if sys.platform == "win32" and _orig_fallback_socketpair is not None:
                 csock.close()
                 err = csock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) if csock.fileno() != -1 else None
                 raise TimeoutError(
-                    f"Windows loopback socketpair timed out after 2.0s (SO_ERROR={err}). "
+                    f"Windows loopback socketpair timed out after {timeout:.1f}s (SO_ERROR={err}). "
                     "Verify local network / loopback socket permissions."
                 ) from e
             except Exception:
@@ -133,6 +133,17 @@ def _clean_session_test_db(db_file: str):
                 pass
 
 
+def canonical_database_path(path: str) -> str:
+    """Canonicalize a database filesystem path on Windows/POSIX, resolving symlinks
+    and directory junctions even if the leaf file does not yet exist.
+    """
+    abs_p = os.path.abspath(path)
+    parent = os.path.dirname(abs_p)
+    leaf = os.path.basename(abs_p)
+    resolved_parent = os.path.realpath(parent) if os.path.exists(parent) else parent
+    return os.path.normcase(os.path.join(resolved_parent, leaf))
+
+
 def verify_test_database_isolation(target_engine, expected_db_path: str, target_settings=None) -> None:
     """Strictly validates that the SQLAlchemy engine is using the dedicated test SQLite database.
     Rejects development database, PostgreSQL/Supabase, or any non-test configuration.
@@ -160,11 +171,11 @@ def verify_test_database_isolation(target_engine, expected_db_path: str, target_
     if not raw_db:
         raise ValueError("Database isolation violation: engine has no database file path")
 
-    norm_resolved = os.path.normcase(os.path.abspath(raw_db))
-    norm_expected = os.path.normcase(os.path.abspath(expected_db_path))
+    norm_resolved = canonical_database_path(raw_db)
+    norm_expected = canonical_database_path(expected_db_path)
 
     # 5. Explicitly reject development database: complexity.db
-    dev_db_file = os.path.normcase(os.path.abspath(os.path.join(os.path.dirname(__file__), "complexity.db")))
+    dev_db_file = canonical_database_path(os.path.join(os.path.dirname(__file__), "complexity.db"))
     if norm_resolved == dev_db_file or norm_resolved.endswith(os.path.normcase(os.path.sep + "complexity.db")):
         raise ValueError("Database isolation violation: engine is connected to development database complexity.db")
 
@@ -177,7 +188,8 @@ def verify_test_database_isolation(target_engine, expected_db_path: str, target_
     # 7. Verify settings agree if provided
     if target_settings is not None:
         sett_url = str(target_settings.DATABASE_URL)
-        if norm_expected not in os.path.normcase(os.path.abspath(sett_url.replace("sqlite+pysqlite:///", ""))):
+        raw_sett_path = sett_url.replace("sqlite+pysqlite:///", "")
+        if norm_expected != canonical_database_path(raw_sett_path):
             raise ValueError("Database isolation violation: settings.DATABASE_URL does not match engine path")
 
 

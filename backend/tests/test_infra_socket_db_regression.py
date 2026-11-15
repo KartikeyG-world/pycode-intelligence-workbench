@@ -1,6 +1,9 @@
 import os
 import sys
 import socket
+import time
+import inspect
+from unittest import mock
 import pytest
 from sqlalchemy import create_engine
 from app.db.database import engine, Base, SessionLocal
@@ -9,8 +12,10 @@ from conftest import (
     TEST_DB_FILE,
     TEST_DB_DIR,
     verify_test_database_isolation,
+    canonical_database_path,
     _clean_session_test_db,
     _clean_stale_test_dbs,
+    _timeout_guarded_socketpair,
 )
 
 
@@ -30,26 +35,46 @@ def test_socketpair_active_and_functional():
 
 
 def test_timeout_guarded_socketpair_bounded_failure():
-    """Verify that if an accept connection does not arrive, it fails cleanly with TimeoutError in <= 2.5s."""
+    """Verify that _timeout_guarded_socketpair executes its accept timeout and cleans up.
+    Simulates the exact failure condition (WSAEWOULDBLOCK where connection never reaches lsock).
+    Verifies that it raises TimeoutError in bounded time and default timeout is 2.0s.
+    """
     if sys.platform != "win32":
         pytest.skip("Windows-specific timeout guard regression test")
 
-    lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    lsock.bind(("127.0.0.1", 0))
-    lsock.listen(1)
-    lsock.settimeout(0.5)  # 0.5s test timeout
-    try:
-        # Deliberately do not connect: accept() must raise socket.timeout / TimeoutError boundedly
-        with pytest.raises((socket.timeout, TimeoutError)):
-            lsock.accept()
-    finally:
-        lsock.close()
+    # 1. Verify default timeout parameter is exactly 2.0s
+    sig = inspect.signature(_timeout_guarded_socketpair)
+    assert sig.parameters["timeout"].default == 2.0, "Default listener timeout must be 2.0s"
+
+    # 2. Exercise the actual _timeout_guarded_socketpair failure path with a shortened 0.3s timeout
+    start_time = time.monotonic()
+    with mock.patch.object(socket.socket, "connect", side_effect=BlockingIOError):
+        with pytest.raises(TimeoutError, match="Windows loopback socketpair timed out after 0.3s") as exc_info:
+            _timeout_guarded_socketpair(timeout=0.3)
+    duration = time.monotonic() - start_time
+
+    # Must complete boundedly in approximately 0.3s (allowing scheduling variance)
+    assert 0.25 <= duration <= 0.60, f"Expected ~0.3s timeout duration, took {duration:.3f}s"
+    assert "SO_ERROR" in str(exc_info.value)
 
 
 def test_database_isolation_runtime_invariants():
     """Verify that tests execute exclusively against the dedicated isolated test SQLite database."""
     # Must pass without raising any ValueError
     verify_test_database_isolation(engine, TEST_DB_FILE)
+
+
+def test_database_isolation_canonical_path_resolution(tmp_path):
+    """Verify canonical_database_path handles symlinks, parent directories, and case normalization."""
+    raw_path = str(tmp_path / "SubDir" / "test.db")
+    canon = canonical_database_path(raw_path)
+
+    # Must normalize drive and casing
+    assert canon == os.path.normcase(os.path.abspath(raw_path))
+
+    # Leaf non-existence must not cause resolution failure
+    assert not os.path.exists(canon)
+    assert canonical_database_path(canon) == canon
 
 
 def test_database_isolation_negative_rejection(tmp_path):

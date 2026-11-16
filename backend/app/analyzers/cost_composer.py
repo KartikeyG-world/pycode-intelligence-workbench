@@ -176,8 +176,9 @@ class CostComposer:
 
         # 2. Check if this function is recursive (self-recursion)
         recurrence_rel: Optional[RecurrenceRelation] = None
+        module_node = self.index.module_func.node if self.index.module_func else None
         if func_id != "<module>" and isinstance(func_info.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            rel = self.recursion_analyzer._analyze_function(func_info.node, func_info.name)
+            rel = self.recursion_analyzer._analyze_function(func_info.node, func_info.name, module_node=module_node)
             if rel is not None:
                 cost.is_recursive = True
                 recurrence_rel = RecurrenceSolver.solve(rel)
@@ -899,11 +900,16 @@ class CostComposer:
                     False,
                     (
                         f"sum() with container start argument on unannotated parameter '{param_name}' evaluates "
-                        "repeated list concatenation under the input model assumption of a finite iterable containing "
-                        "compatible built-in Python list objects. The outer iterator dispatches k addition operations, "
-                        "establishing a proven lower bound of Omega(k) and a modeled outer work contribution of O(k). "
-                        "However, total time complexity T(k) = Theta(k + sum_{i=1}^k sum_{j=1}^i l_j) is unproven and "
-                        "statically Unknown because inner sublist lengths l_j are unconstrained."
+                        "repeated list concatenation under formal input model assumptions: "
+                        "(1) finite outer iterable of length k, "
+                        "(2) controlled/amortized outer iteration cost with iterator-generation overhead excluded, "
+                        "(3) exact compatible built-in Python list semantics, "
+                        "(4) no unmodeled overloaded list operations. "
+                        "Under these semantics, CPython repeatedly re-allocates and copies accumulator contents, yielding "
+                        "exact total work T(k) = Theta(k + sum_{i=1}^k sum_{j=1}^i l_j). "
+                        "This establishes a proven lower bound of Omega(k) and a modeled outer work contribution of O(k) "
+                        "for outer iterator dispatch. However, total time complexity is statically Unknown because "
+                        "inner sublist lengths l_j are unconstrained."
                     ),
                 )
 

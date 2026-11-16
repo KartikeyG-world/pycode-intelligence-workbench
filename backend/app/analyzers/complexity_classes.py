@@ -194,7 +194,15 @@ class ComplexityClass:
         if self.category == "polynomial":
             return 10.0 * self.poly_degree + 2.0 * self.log_degree
         if self.category == "custom":
-            return 25.0
+            raw = self._raw_expression()
+            deg = 1.0
+            if "*" in raw:
+                deg = float(len(raw.split("*")))
+            if "³" in raw or "^3" in raw:
+                deg += 2.0
+            elif "²" in raw or "^2" in raw:
+                deg += 1.0
+            return 10.0 * max(1.0, deg)
         if self.category == "exponential":
             # 2^n -> 100, 3^n -> 150, etc.
             return 100.0 * math.log2(max(1.5, self.exp_base)) + 5.0 * self.poly_degree

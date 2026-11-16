@@ -1350,4 +1350,272 @@ def flatten(nested):
     assert "proven lower bound of Omega(k)" in reason
     assert "modeled outer work contribution of O(k)" in reason
     assert "statically Unknown because inner sublist lengths l_j are unconstrained" in reason
-    assert "finite iterable containing compatible built-in Python list objects" in reason
+    assert "exact compatible built-in Python list semantics" in reason
+    assert "finite outer iterable of length k" in reason
+
+
+def test_73_len_locally_shadowed_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 73: len() with locally shadowed len escapes allocated argument, resulting in O(n^2) space."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    len = lambda x: 0
+    x = len(temporary)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_74_len_parameter_shadowed_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 74: len() with parameter named len escapes allocated argument, resulting in O(n^2) space."""
+    code = """
+def process(n, len):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    x = len(temporary)
+    del temporary
+    return process(n - 1, len)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_75_len_custom_class_with_user_len_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 75: len() on a custom class with user-defined __len__ escapes allocation, resulting in O(n^2) space."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = CustomContainer()
+    x = len(temporary)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert not res.analysis_complete
+    assert res.analysis_status == "PARTIAL"
+    assert res.known_time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_76_id_and_type_locally_shadowed_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 76: id() and type() with locally shadowed name escape allocation, resulting in O(n^2) space."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    id = lambda x: 42
+    x = id(temporary)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_77_print_custom_object_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 77: print() of custom object whose representation executes arbitrary code escapes allocation."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = CustomNode()
+    print(temporary)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert not res.analysis_complete
+    assert res.analysis_status == "PARTIAL"
+    assert res.known_time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_78_print_list_of_custom_objects_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 78: print() of list of custom objects with unmodeled repr escapes allocation."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = [Elem() for _ in range(n)]
+    print(temporary)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert not res.analysis_complete
+    assert res.analysis_status == "PARTIAL"
+    assert res.known_time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_79_print_custom_stdout_stream_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 79: print() with custom.stdout stream (not sys.stdout) escapes allocation into buffer."""
+    code = """
+class CustomStream:
+    stdout = None
+
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    print(temporary, file=CustomStream.stdout)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_80_print_shadowed_sys_parameter_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 80: print() with shadowed sys parameter escapes allocation."""
+    code = """
+def process(n, sys):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    print(temporary, file=sys.stdout)
+    del temporary
+    return process(n - 1, sys)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_81_print_imported_sys_alias_preserves_single_frame_deallocation(analyzer: ComplexityAnalyzer):
+    """Test 81: print() with imported sys alias (import sys as s; print(..., file=s.stdout)) preserves single-frame deallocation."""
+    code = """
+import sys as s
+
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    print(temporary, file=s.stdout)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_82_recursive_shared_allocation_passed_bounds_heap(analyzer: ComplexityAnalyzer):
+    """Test 82: Recursive object identity - Shared allocation passed across recursive frames
+    references 1 single allocation, counted once to O(n) total space, not multiplied by call depth.
+    """
+    code = """
+shared_data = [0] * n
+
+def solve(n, data):
+    if n <= 0:
+        return 0
+    return solve(n - 1, data)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_83_recursive_fresh_allocation_accumulates_quadratic_heap(analyzer: ComplexityAnalyzer):
+    """Test 83: Recursive object identity - Fresh allocation per recursive frame without prior
+    deallocation accumulates to O(n^2) live heap across call depth n.
+    """
+    code = """
+def solve(n):
+    if n <= 0:
+        return 0
+    frame_alloc = [0] * n
+    return solve(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_84_cache_composition_unique_arg_quadratic_fresh_ret_linear(analyzer: ComplexityAnalyzer):
+    """Test 84: Cache composition - Unique argument O(n^2) larger than fresh return O(n)
+    dominates combined cache memory to |R| * O(n^2) = O(n^3).
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, matrix):
+    if n <= 0:
+        return [0] * n
+    new_matrix = [[0] * n for _ in range(n)]
+    res = solve(n - 1, new_matrix)
+    return [0] * n
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity in ("O(n)", "O(n²)")
+    assert res.space_breakdown.cache_retained == "O(n³)"
+    assert res.space_complexity == "O(n³)"
+
+
+def test_85_cache_composition_fresh_ret_quadratic_unique_arg_linear(analyzer: ComplexityAnalyzer):
+    """Test 85: Cache composition - Fresh return O(n^2) larger than unique argument O(n)
+    dominates combined cache memory to |R| * O(n^2) = O(n^3).
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, path):
+    if n <= 0:
+        return [[0] * n for _ in range(n)]
+    new_path = path + (n,)
+    res = solve(n - 1, new_path)
+    return [[0] * n for _ in range(n)]
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity in ("O(n)", "O(n²)")
+    assert res.space_breakdown.cache_retained == "O(n³)"
+    assert res.space_complexity == "O(n³)"
+
+
+def test_86_cache_composition_bounded_cache_simultaneous_growing(analyzer: ComplexityAnalyzer):
+    """Test 86: Cache composition - Both argument and return simultaneously growing O(n) in bounded
+    cache (@lru_cache(maxsize=32)) bounds table entry count to O(1) and retains O(n) total cache memory.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=32)
+def solve(n, path):
+    if n <= 0:
+        return [0] * n
+    new_path = path + (n,)
+    res = solve(n - 1, new_path)
+    return [0] * n
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.time_complexity == "O(n)"
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"

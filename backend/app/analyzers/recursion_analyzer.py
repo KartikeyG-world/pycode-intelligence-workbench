@@ -24,6 +24,15 @@ class RecursionCallSite:
         self.branch_context = branch_context
 
 
+class AllocationInfo:
+    """Holds cost and structural type invariants for heap allocations."""
+
+    def __init__(self, cost: ComplexityClass, is_exact_builtin: bool = True, has_primitive_elements: bool = True):
+        self.cost = cost
+        self.is_exact_builtin = is_exact_builtin
+        self.has_primitive_elements = has_primitive_elements
+
+
 class RecursionAnalyzer:
     """Extracts call sites, control-flow execution paths, argument transformations, and symbolic recurrences."""
 
@@ -33,7 +42,7 @@ class RecursionAnalyzer:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 func_name = node.name
-                rel = self._analyze_function(node, func_name)
+                rel = self._analyze_function(node, func_name, tree)
                 if rel is not None:
                     # Solve the extracted recurrence relation
                     solved_rel = RecurrenceSolver.solve(rel)
@@ -41,7 +50,9 @@ class RecursionAnalyzer:
 
         return results
 
-    def _analyze_function(self, func_node: ast.FunctionDef, func_name: str) -> Optional[RecurrenceRelation]:
+    def _analyze_function(
+        self, func_node: ast.FunctionDef, func_name: str, module_node: Optional[ast.AST] = None
+    ) -> Optional[RecurrenceRelation]:
         # 1. Collect all recursive calls
         recursive_calls: List[ast.Call] = []
         for child in ast.walk(func_node):
@@ -84,7 +95,7 @@ class RecursionAnalyzer:
         local_work = self._inspect_local_work(func_node)
 
         # 8. Check local allocations per frame and whether they are released before recursive calls
-        local_alloc, alloc_released = self._inspect_recursive_local_allocations(func_node, func_name)
+        local_alloc, alloc_released = self._inspect_recursive_local_allocations(func_node, func_name, module_node)
 
         # 9. Check cache payload semantics (shared vs unique argument/return allocations)
         has_shared_arg, has_unique_arg, has_shared_ret, has_fresh_ret, arg_payload, ret_payload = (
@@ -221,7 +232,9 @@ class RecursionAnalyzer:
 
                 container_payload_names = {
                     "path", "acc", "accumulator", "prefix", "suffix", "curr", "current",
-                    "trail", "history", "shared", "arr", "lst", "items", "data", "nums", "seq", "values", "tuple", "list"
+                    "trail", "history", "shared", "arr", "lst", "items", "data", "nums",
+                    "seq", "values", "tuple", "list", "matrix", "grid", "board", "table",
+                    "graph", "payload"
                 }
 
                 if len(input_params) >= 2:
@@ -420,24 +433,18 @@ class RecursionAnalyzer:
         return max_class
 
     def _inspect_recursive_local_allocations(
-        self, func_node: ast.FunctionDef, func_name: str
+        self, func_node: ast.FunctionDef, func_name: str, module_node: Optional[ast.AST] = None
     ) -> Tuple[Optional[ComplexityClass], bool]:
         """Detects whether this recursive function allocates heap structures per frame,
         and whether those allocations are deleted/released before recursive call(s) without surviving aliases or escaping.
         """
         allocations: Dict[int, ComplexityClass] = {}
+        alloc_metadata: Dict[int, AllocationInfo] = {}
         var_to_allocs: Dict[str, Set[int]] = {}
         escaped_allocs: Set[int] = set()
         next_alloc_id = 1
 
-        # Check parameter inputs that represent large container payloads (e.g. items, arr, data, values)
-        for param in func_node.args.args:
-            pname = param.arg
-            if any(kw in pname.lower() for kw in ("arr", "lst", "items", "data", "matrix", "grid", "nums", "seq", "values")):
-                aid = next_alloc_id
-                next_alloc_id += 1
-                allocations[aid] = ComplexityClass.linear("n")
-                var_to_allocs.setdefault(pname, set()).add(aid)
+        shadowed_builtins, valid_sys = self._collect_shadowed_builtins_and_sys(func_node, module_node)
 
         for stmt in func_node.body:
             # 1. Explicit deletion: del x, y
@@ -455,11 +462,12 @@ class RecursionAnalyzer:
                         if isinstance(child, ast.Name) and child.id in var_to_allocs:
                             escaped_allocs.update(var_to_allocs[child.id])
                 else:
-                    alloc_cost = self._evaluate_allocation_node(stmt.value)
-                    if alloc_cost:
+                    alloc_info = self._evaluate_allocation_node(stmt.value, func_name=func_name)
+                    if alloc_info:
                         aid = next_alloc_id
                         next_alloc_id += 1
-                        allocations[aid] = alloc_cost
+                        allocations[aid] = alloc_info.cost
+                        alloc_metadata[aid] = alloc_info
                         for t in stmt.targets:
                             if isinstance(t, ast.Name):
                                 var_to_allocs[t.id] = {aid}
@@ -482,11 +490,12 @@ class RecursionAnalyzer:
                         if isinstance(child, ast.Name) and child.id in var_to_allocs:
                             escaped_allocs.update(var_to_allocs[child.id])
                 else:
-                    alloc_cost = self._evaluate_allocation_node(stmt.value)
-                    if alloc_cost and isinstance(stmt.target, ast.Name):
+                    alloc_info = self._evaluate_allocation_node(stmt.value, func_name=func_name)
+                    if alloc_info and isinstance(stmt.target, ast.Name):
                         aid = next_alloc_id
                         next_alloc_id += 1
-                        allocations[aid] = alloc_cost
+                        allocations[aid] = alloc_info.cost
+                        alloc_metadata[aid] = alloc_info
                         var_to_allocs[stmt.target.id] = {aid}
                     elif isinstance(stmt.value, ast.Name) and stmt.value.id in var_to_allocs and isinstance(stmt.target, ast.Name):
                         var_to_allocs[stmt.target.id] = set(var_to_allocs[stmt.value.id])
@@ -521,26 +530,69 @@ class RecursionAnalyzer:
                                 if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
                                     escaped_allocs.update(var_to_allocs[sub.id])
                     elif cname == "print":
-                        # print() is non-escaping for stdout / stderr, but if a custom file/stream writer
-                        # is passed (e.g. print(temp, file=custom_writer)), references escape into that writer.
-                        has_custom_stream = False
-                        for kw in child.keywords:
-                            if kw.arg == "file":
-                                if isinstance(kw.value, ast.Constant) and kw.value.value is None:
-                                    continue
-                                if isinstance(kw.value, ast.Attribute) and kw.value.attr in ("stdout", "stderr"):
-                                    continue
-                                has_custom_stream = True
-                        if has_custom_stream:
+                        if "print" in shadowed_builtins:
+                            # Locally or module-shadowed print function escapes arguments
                             for a in all_call_args:
                                 for sub in ast.walk(a):
                                     if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
                                         escaped_allocs.update(var_to_allocs[sub.id])
+                        else:
+                            # Unshadowed print: verify stream destination and argument representation safety
+                            has_custom_stream = False
+                            for kw in child.keywords:
+                                if kw.arg == "file":
+                                    if isinstance(kw.value, ast.Constant) and kw.value.value is None:
+                                        continue
+                                    if (
+                                        isinstance(kw.value, ast.Attribute)
+                                        and kw.value.attr in ("stdout", "stderr")
+                                        and isinstance(kw.value.value, ast.Name)
+                                        and kw.value.value.id in valid_sys
+                                    ):
+                                        continue
+                                    has_custom_stream = True
+
+                            if has_custom_stream:
+                                # Custom stream writer: the serialized string representation of size O(n)
+                                # is passed to custom_writer.write(s) and retained in the stream buffer
+                                for a in all_call_args:
+                                    for sub in ast.walk(a):
+                                        if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                            escaped_allocs.update(var_to_allocs[sub.id])
+                            else:
+                                # Safe stdout / stderr: verify argument representation does not invoke user side effects
+                                for a in all_call_args:
+                                    for sub in ast.walk(a):
+                                        if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                            aids = var_to_allocs[sub.id]
+                                            # Non-escaping ONLY if exact supported built-in with primitive scalar elements
+                                            if any(
+                                                not alloc_metadata[aid].is_exact_builtin
+                                                or not alloc_metadata[aid].has_primitive_elements
+                                                for aid in aids if aid in alloc_metadata
+                                            ):
+                                                escaped_allocs.update(aids)
                     elif cname in ("len", "id", "type"):
-                        # Whitelisted non-escaping operations under the assumption of unshadowed built-in
-                        # functions operating on built-in collections (list, dict, set). These inspect
-                        # internal metadata (e.g. ob_size, pointer address, ob_type) without retaining references.
-                        pass
+                        if cname in shadowed_builtins:
+                            # Locally or module-shadowed callable escapes arguments
+                            for a in all_call_args:
+                                for sub in ast.walk(a):
+                                    if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                        escaped_allocs.update(var_to_allocs[sub.id])
+                        elif cname == "len":
+                            # Built-in len() is non-escaping ONLY on exact supported built-in collections
+                            for a in all_call_args:
+                                for sub in ast.walk(a):
+                                    if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                        aids = var_to_allocs[sub.id]
+                                        if any(
+                                            not alloc_metadata[aid].is_exact_builtin
+                                            for aid in aids if aid in alloc_metadata
+                                        ):
+                                            escaped_allocs.update(aids)
+                        else:
+                            # id() and type() on unshadowed built-in are strictly non-escaping
+                            pass
                     else:
                         # External or unresolved function/method invocation: conservatively treat arguments as escaped.
                         for a in all_call_args:
@@ -551,11 +603,12 @@ class RecursionAnalyzer:
         # 6. Check all return and yield statements across branches for returned allocations (which escape into caller/cache)
         for node in ast.walk(func_node):
             if isinstance(node, ast.Return) and node.value:
-                alloc_cost = self._evaluate_allocation_node(node.value)
-                if alloc_cost:
+                alloc_info = self._evaluate_allocation_node(node.value, func_name=func_name)
+                if alloc_info:
                     aid = next_alloc_id
                     next_alloc_id += 1
-                    allocations[aid] = alloc_cost
+                    allocations[aid] = alloc_info.cost
+                    alloc_metadata[aid] = alloc_info
                     escaped_allocs.add(aid)
                 for child in ast.walk(node.value):
                     if isinstance(child, ast.Name) and child.id in var_to_allocs:
@@ -583,24 +636,136 @@ class RecursionAnalyzer:
 
         return max_alloc, all_released
 
-    def _evaluate_allocation_node(self, node: Optional[ast.AST]) -> Optional[ComplexityClass]:
+    def _collect_shadowed_builtins_and_sys(
+        self, func_node: ast.FunctionDef, module_node: Optional[ast.AST] = None
+    ) -> Tuple[Set[str], Set[str]]:
+        """Collects shadowed built-in names (len, id, type, print) and discovers valid sys module bindings."""
+        shadowed: Set[str] = set()
+        valid_sys: Set[str] = {"sys"}
+
+        # 1. Inspect module-level imports and assignments if module AST is available
+        if module_node and isinstance(module_node, ast.Module):
+            for stmt in module_node.body:
+                if isinstance(stmt, ast.Import):
+                    for alias in stmt.names:
+                        if alias.name == "sys":
+                            if alias.asname:
+                                valid_sys.add(alias.asname)
+                                valid_sys.discard("sys")
+                        elif alias.asname == "sys":
+                            # import other as sys -> sys is NOT the standard library sys
+                            valid_sys.discard("sys")
+                        if alias.asname in ("len", "id", "type", "print"):
+                            shadowed.add(alias.asname)
+                        elif alias.name in ("len", "id", "type", "print") and not alias.asname:
+                            shadowed.add(alias.name)
+                elif isinstance(stmt, ast.ImportFrom):
+                    for alias in stmt.names:
+                        name_bound = alias.asname or alias.name
+                        if name_bound in ("len", "id", "type", "print"):
+                            shadowed.add(name_bound)
+                        if name_bound in valid_sys:
+                            valid_sys.discard(name_bound)
+                elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    for target in self._extract_targets_from_node(stmt):
+                        if target in ("len", "id", "type", "print"):
+                            shadowed.add(target)
+                        if target in valid_sys:
+                            valid_sys.discard(target)
+                elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if stmt.name in ("len", "id", "type", "print"):
+                        shadowed.add(stmt.name)
+                    if stmt.name in valid_sys:
+                        valid_sys.discard(stmt.name)
+
+        # 2. Inspect function parameters
+        for arg in (
+            func_node.args.posonlyargs
+            + func_node.args.args
+            + ([func_node.args.vararg] if func_node.args.vararg else [])
+            + func_node.args.kwonlyargs
+            + ([func_node.args.kwarg] if func_node.args.kwarg else [])
+        ):
+            if arg and arg.arg:
+                if arg.arg in ("len", "id", "type", "print"):
+                    shadowed.add(arg.arg)
+                if arg.arg in valid_sys:
+                    valid_sys.discard(arg.arg)
+
+        # 3. Inspect local statements inside function body
+        for stmt in func_node.body:
+            for child in ast.walk(stmt):
+                if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.For, ast.NamedExpr)):
+                    for target in self._extract_targets_from_node(child):
+                        if target in ("len", "id", "type", "print"):
+                            shadowed.add(target)
+                        if target in valid_sys:
+                            valid_sys.discard(target)
+                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if child.name in ("len", "id", "type", "print"):
+                        shadowed.add(child.name)
+                    if child.name in valid_sys:
+                        valid_sys.discard(child.name)
+                elif isinstance(child, (ast.Import, ast.ImportFrom)):
+                    for alias in child.names:
+                        name_bound = alias.asname or alias.name
+                        if name_bound in ("len", "id", "type", "print"):
+                            shadowed.add(name_bound)
+                        if name_bound in valid_sys:
+                            valid_sys.discard(name_bound)
+
+        return shadowed, valid_sys
+
+    def _extract_targets_from_node(self, node: ast.AST) -> List[str]:
+        targets: List[str] = []
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    targets.append(t.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets.append(node.target.id)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            targets.append(node.target.id)
+        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            targets.append(node.target.id)
+        elif isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+            targets.append(node.target.id)
+        return targets
+
+    def _evaluate_allocation_node(
+        self, node: Optional[ast.AST], func_name: Optional[str] = None
+    ) -> Optional[AllocationInfo]:
         if node is None:
             return None
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
             if isinstance(node.left, ast.List) or isinstance(node.right, ast.List):
+                list_op = node.left if isinstance(node.left, ast.List) else node.right
                 mult_operand = node.right if isinstance(node.left, ast.List) else node.left
+                all_prims = all(isinstance(elt, ast.Constant) for elt in list_op.elts)
                 if isinstance(mult_operand, ast.BinOp) and isinstance(mult_operand.op, ast.Mult):
-                    return ComplexityClass.polynomial(2.0)
-                return ComplexityClass.linear()
+                    return AllocationInfo(ComplexityClass.polynomial(2.0), is_exact_builtin=True, has_primitive_elements=all_prims)
+                if isinstance(mult_operand, ast.Name):
+                    return AllocationInfo(ComplexityClass.linear(mult_operand.id), is_exact_builtin=True, has_primitive_elements=all_prims)
+                return AllocationInfo(ComplexityClass.linear(), is_exact_builtin=True, has_primitive_elements=all_prims)
         elif isinstance(node, ast.ListComp):
+            has_custom_elt = isinstance(node.elt, ast.Call)
             if isinstance(node.elt, (ast.ListComp, ast.BinOp)):
-                return ComplexityClass.polynomial(2.0)
-            return ComplexityClass.linear()
+                cost = ComplexityClass.polynomial(2.0)
+            else:
+                cost = ComplexityClass.linear()
+            return AllocationInfo(cost, is_exact_builtin=True, has_primitive_elements=not has_custom_elt)
         elif isinstance(node, (ast.DictComp, ast.SetComp)):
-            return ComplexityClass.linear()
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("list", "tuple", "dict", "set"):
-            if node.args:
-                return ComplexityClass.linear()
+            has_custom_elt = isinstance(node.value if isinstance(node, ast.DictComp) else node.elt, ast.Call)
+            return AllocationInfo(ComplexityClass.linear(), is_exact_builtin=True, has_primitive_elements=not has_custom_elt)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if func_name and node.func.id == func_name:
+                return None
+            if node.func.id in ("list", "tuple", "dict", "set"):
+                if node.args:
+                    return AllocationInfo(ComplexityClass.linear(), is_exact_builtin=True, has_primitive_elements=True)
+            elif node.func.id and node.func.id[0].isupper():
+                # Custom object instantiation (e.g. CustomClass(), CustomList())
+                return AllocationInfo(ComplexityClass.linear(), is_exact_builtin=False, has_primitive_elements=False)
         return None
 
     def _inspect_cache_payload_semantics(
@@ -614,22 +779,24 @@ class RecursionAnalyzer:
         - argument_payload_class: complexity class of argument payload (if any).
         - return_payload_class: complexity class of return payload (if any).
         """
-        local_alloc_vars: Set[str] = set()
+        local_alloc_vars: Dict[str, ComplexityClass] = {}
         for stmt in func_node.body:
             if isinstance(stmt, ast.Assign):
-                is_alloc = self._evaluate_allocation_node(stmt.value) is not None
-                if not is_alloc and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, (ast.Add, ast.Mult)):
-                    is_alloc = True
-                if is_alloc:
+                alloc_info = self._evaluate_allocation_node(stmt.value, func_name=func_name)
+                if alloc_info:
                     for t in stmt.targets:
                         if isinstance(t, ast.Name):
-                            local_alloc_vars.add(t.id)
+                            local_alloc_vars[t.id] = alloc_info.cost
+                elif isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, (ast.Add, ast.Mult)):
+                    for t in stmt.targets:
+                        if isinstance(t, ast.Name):
+                            local_alloc_vars[t.id] = ComplexityClass.linear("n")
             elif isinstance(stmt, ast.AnnAssign) and stmt.value:
-                is_alloc = self._evaluate_allocation_node(stmt.value) is not None
-                if not is_alloc and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, (ast.Add, ast.Mult)):
-                    is_alloc = True
-                if is_alloc and isinstance(stmt.target, ast.Name):
-                    local_alloc_vars.add(stmt.target.id)
+                alloc_info = self._evaluate_allocation_node(stmt.value, func_name=func_name)
+                if alloc_info and isinstance(stmt.target, ast.Name):
+                    local_alloc_vars[stmt.target.id] = alloc_info.cost
+                elif isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, (ast.Add, ast.Mult)) and isinstance(stmt.target, ast.Name):
+                    local_alloc_vars[stmt.target.id] = ComplexityClass.linear("n")
 
         has_unique_argument_allocation = False
         has_shared_argument = False
@@ -650,16 +817,21 @@ class RecursionAnalyzer:
 
         for rc in rec_calls:
             for a in rc.args:
-                if isinstance(a, ast.BinOp) and isinstance(a.op, (ast.Add, ast.Mult)):
+                alloc_info = self._evaluate_allocation_node(a, func_name=func_name)
+                if alloc_info:
                     has_unique_argument_allocation = True
-                    argument_payload_class = ComplexityClass.linear("n")
+                    argument_payload_class = ComplexityClass.dominant_of(argument_payload_class or ComplexityClass.constant(), alloc_info.cost)
+                elif isinstance(a, ast.BinOp) and isinstance(a.op, (ast.Add, ast.Mult)):
+                    has_unique_argument_allocation = True
+                    argument_payload_class = ComplexityClass.dominant_of(argument_payload_class or ComplexityClass.constant(), ComplexityClass.linear("n"))
                 elif isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id in ("list", "tuple", "set", "dict"):
                     if a.args:
                         has_unique_argument_allocation = True
-                        argument_payload_class = ComplexityClass.linear("n")
+                        argument_payload_class = ComplexityClass.dominant_of(argument_payload_class or ComplexityClass.constant(), ComplexityClass.linear("n"))
                 elif isinstance(a, ast.Name) and a.id in local_alloc_vars:
                     has_unique_argument_allocation = True
-                    argument_payload_class = ComplexityClass.linear("n")
+                    cost = local_alloc_vars[a.id]
+                    argument_payload_class = ComplexityClass.dominant_of(argument_payload_class or ComplexityClass.constant(), cost)
 
         if not has_unique_argument_allocation and container_param_candidates:
             for rc in rec_calls:
@@ -678,20 +850,18 @@ class RecursionAnalyzer:
         for node in ast.walk(func_node):
             if isinstance(node, ast.Return) and node.value:
                 val = node.value
-                alloc_cost = self._evaluate_allocation_node(val)
-                if alloc_cost:
+                alloc_info = self._evaluate_allocation_node(val, func_name=func_name)
+                if alloc_info:
                     has_fresh_return_allocation = True
-                    return_payload_class = alloc_cost
+                    return_payload_class = ComplexityClass.dominant_of(return_payload_class or ComplexityClass.constant(), alloc_info.cost)
                 elif isinstance(val, ast.Name):
                     if val.id in local_alloc_vars:
                         has_fresh_return_allocation = True
-                        return_payload_class = ComplexityClass.linear("n")
+                        cost = local_alloc_vars[val.id]
+                        return_payload_class = ComplexityClass.dominant_of(return_payload_class or ComplexityClass.constant(), cost)
                     elif val.id in container_param_candidates or "shared" in val.id.lower() or any(kw in val.id.lower() for kw in ("result", "data", "table", "arr")):
                         has_shared_return_object = True
-                        return_payload_class = ComplexityClass.linear("n")
-
-        if has_fresh_return_allocation:
-            has_shared_return_object = False
+                        return_payload_class = ComplexityClass.dominant_of(return_payload_class or ComplexityClass.constant(), ComplexityClass.linear("n"))
 
         return (
             has_shared_argument,

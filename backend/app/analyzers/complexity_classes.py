@@ -268,5 +268,31 @@ class ComplexityClass:
         if c1.variables != c2.variables and c1.variables and c2.variables:
             return cls.multi_variable(f"{c1.variables[0]}*{c2.variables[0]}")
 
+        # Custom / multi-variable * Linear or Polynomial: e.g. O(n*m) * O(n) = O(n²*m)
+        if c1.category == "custom" or c2.category == "custom":
+            cust = c1 if c1.category == "custom" else c2
+            other = c2 if c1.category == "custom" else c1
+            raw = cust._raw_expression()
+            if other.category == "linear":
+                ovar = other.variables[0] if other.variables else "n"
+                if ovar in raw and not ("min(" in raw or "max(" in raw):
+                    import re
+                    new_str = re.sub(rf"\b{ovar}\b", f"{ovar}²", raw, count=1)
+                    return cls.multi_variable(new_str)
+                else:
+                    return cls.multi_variable(f"{ovar}*{raw}")
+            elif other.category == "polynomial":
+                ovar = other.variables[0] if other.variables else "n"
+                deg = int(other.poly_degree)
+                p_str = f"{ovar}²" if deg == 2 else (f"{ovar}³" if deg == 3 else f"{ovar}^{deg}")
+                if ovar in raw and not ("min(" in raw or "max(" in raw):
+                    import re
+                    new_deg = deg + 1
+                    rep_str = f"{ovar}²" if new_deg == 2 else (f"{ovar}³" if new_deg == 3 else f"{ovar}^{new_deg}")
+                    new_str = re.sub(rf"\b{ovar}\b", rep_str, raw, count=1)
+                    return cls.multi_variable(new_str)
+                else:
+                    return cls.multi_variable(f"{p_str}*{raw}")
+
         # Fallback to dominant or custom
         return cls.dominant_of(c1, c2)

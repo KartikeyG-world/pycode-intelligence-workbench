@@ -428,8 +428,14 @@ class RecurrenceSolver:
         else:
             state_class = ComplexityClass.linear(var)
 
-        rel.solved_complexity = state_class
-        rel.traversal_complexity = state_class
+        # Distinguish state space cardinality from total execution time:
+        # T_total = sum_{s in R} T_local(s) + T_transition/cache overhead
+        if rel.local_work and rel.local_work > ComplexityClass.constant():
+            rel.solved_complexity = ComplexityClass.multiply(state_class, rel.local_work)
+            rel.traversal_complexity = rel.solved_complexity
+        else:
+            rel.solved_complexity = state_class
+            rel.traversal_complexity = state_class
 
         # Check cache memory
         ret_alloc = rel.local_allocation_work
@@ -456,13 +462,15 @@ class RecurrenceSolver:
             if rel.is_bounded_cache
             else f"Bounded by reachable state count {state_desc}"
         )
+        local_work_str = "Θ(1)" if rel.local_work.category == "constant" else (rel.local_work.tight_bound if rel.local_work.tight_bound != "Unknown" else rel.local_work.big_o)
         rel.derivation_steps = [
             "Memoization table / cache detected for recursive state transitions.",
-            f"State space is bounded by distinct subproblem states: {state_desc}.",
+            f"State space cardinality is bounded by distinct reachable states: |R| = {state_desc}.",
+            f"Local non-recursive work per state: T_local(s) = {local_work_str}.",
             f"Cache entry count: {entry_count_desc}. Each entry retains references to argument keys and computed return values.",
-            f"Retained byte-memory: {rel.cache_retained_class.big_o} (Note: entry count bounds table entries, while byte-memory scales with payload sizes).",
-            "Each state is computed at most once; subsequent queries are resolved in O(1) time.",
-            f"Total time complexity reduces from naive exponential to {rel.solved_complexity.tight_bound}.",
+            f"Retained byte-memory: {rel.cache_retained_class.big_o} (Note: fixed entry count bounds table entries to O(1), while retained byte-memory scales with payload sizes).",
+            "Each reachable state is computed at most once on cache miss; repeated calls or transitions to previously cached states resolve in O(1) cache lookup overhead.",
+            f"Total execution time: T_total = sum_{{s in R}} T_local(s) + T_overhead = {rel.solved_complexity.tight_bound}.",
         ]
         rel.confidence_reasons = [
             "Cache lookup / assignment verified in AST.",

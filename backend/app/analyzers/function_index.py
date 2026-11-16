@@ -112,8 +112,11 @@ class FunctionIndex:
                         executable_stmts.append(ast.Expr(value=d))
                 for dec in stmt.decorator_list:
                     if isinstance(dec, ast.Call):
-                        self.has_executable_module_code = True
-                        executable_stmts.append(ast.Expr(value=dec))
+                        dec_func = dec.func
+                        dec_name = dec_func.id if isinstance(dec_func, ast.Name) else (dec_func.attr if isinstance(dec_func, ast.Attribute) else "")
+                        if dec_name not in ("staticmethod", "classmethod", "property", "cache", "lru_cache"):
+                            self.has_executable_module_code = True
+                            executable_stmts.append(ast.Expr(value=dec))
                 continue
             if isinstance(stmt, ast.ClassDef):
                 continue

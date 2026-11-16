@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, model_validator
 
@@ -93,15 +94,27 @@ class RecurrenceInfo(BaseModel):
     derivation_steps: List[str] = Field(default_factory=list)
 
 
-class UnresolvedCostItem(BaseModel):
+class UnresolvedCostItem(BaseModel, Mapping):
     operation: str
     line: Optional[int] = None
     context: Optional[str] = None
     loop_depth: Optional[int] = 0
     reason: Optional[str] = None
 
-    def __getitem__(self, item: str) -> Any:
-        return getattr(self, item)
+    def __getitem__(self, key: str) -> Any:
+        fields = type(self).model_fields
+        if key in fields:
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter(type(self).model_fields)
+
+    def __len__(self):
+        return len(type(self).model_fields)
+
+    def __contains__(self, key: object) -> bool:
+        return key in type(self).model_fields
 
 
 class AnalyzeResponse(BaseModel):

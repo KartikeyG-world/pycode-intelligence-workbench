@@ -183,14 +183,36 @@ class CallGraph:
             # Decorator expressions and default argument expressions evaluate at definition time in the enclosing scope
             def visit_FunctionDef(self, node: ast.FunctionDef):
                 for dec in node.decorator_list:
-                    self.visit(dec)
+                    dec_name = ""
+                    if isinstance(dec, ast.Name):
+                        dec_name = dec.id
+                    elif isinstance(dec, ast.Attribute):
+                        dec_name = dec.attr
+                    elif isinstance(dec, ast.Call):
+                        if isinstance(dec.func, ast.Name):
+                            dec_name = dec.func.id
+                        elif isinstance(dec.func, ast.Attribute):
+                            dec_name = dec.func.attr
+                    if dec_name not in ("staticmethod", "classmethod", "property", "cache", "lru_cache"):
+                        self.visit(dec)
                 for d in node.args.defaults + [kd for kd in node.args.kw_defaults if kd]:
                     self.visit(d)
                 # Function body is deferred, so do not visit node.body here
 
             def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
                 for dec in node.decorator_list:
-                    self.visit(dec)
+                    dec_name = ""
+                    if isinstance(dec, ast.Name):
+                        dec_name = dec.id
+                    elif isinstance(dec, ast.Attribute):
+                        dec_name = dec.attr
+                    elif isinstance(dec, ast.Call):
+                        if isinstance(dec.func, ast.Name):
+                            dec_name = dec.func.id
+                        elif isinstance(dec.func, ast.Attribute):
+                            dec_name = dec.func.attr
+                    if dec_name not in ("staticmethod", "classmethod", "property", "cache", "lru_cache"):
+                        self.visit(dec)
                 for d in node.args.defaults + [kd for kd in node.args.kw_defaults if kd]:
                     self.visit(d)
                 # Async function body is deferred, so do not visit node.body here

@@ -208,6 +208,8 @@ class CostComposer:
                         cost.analysis_complete = False
                         cost.analysis_status = "PARTIAL"
                         cost.limitations.append(f"Enclosed loop call: {reason}")
+                        if site.callee_name == "sum":
+                            loop_class = ComplexityClass.dominant_of(loop_class, ComplexityClass.linear())
                     else:
                         if c_cost > ComplexityClass.constant():
                             loop_depth = max(1, site.loop_depth)
@@ -245,6 +247,8 @@ class CostComposer:
                     cost.analysis_complete = False
                     cost.analysis_status = "PARTIAL"
                     cost.limitations.append(reason)
+                    if site.callee_name == "sum":
+                        sequential_call_class = ComplexityClass.dominant_of(sequential_call_class, ComplexityClass.linear())
                 else:
                     sequential_call_class = ComplexityClass.dominant_of(sequential_call_class, call_cost)
                     if call_cost > ComplexityClass.constant():
@@ -563,6 +567,8 @@ class CostComposer:
                         cost.analysis_complete = False
                         cost.analysis_status = "PARTIAL"
                         cost.limitations.append(f"Enclosed loop call: {reason}")
+                        if site.callee_name == "sum":
+                            loop_class = ComplexityClass.dominant_of(loop_class, ComplexityClass.linear())
                     else:
                         if c_cost > ComplexityClass.constant():
                             loop_depth = max(1, site.loop_depth)
@@ -806,23 +812,92 @@ class CostComposer:
                 and start_arg.func.id in ("list", "tuple")
             ):
                 first_arg = call.args[0]
-                is_inner_param = False
                 if isinstance(first_arg, ast.ListComp):
-                    if isinstance(first_arg.elt, ast.BinOp) and isinstance(first_arg.elt.op, ast.Mult):
-                        is_inner_param = True
-                    elif isinstance(first_arg.elt, ast.ListComp):
-                        is_inner_param = True
+                    outer_var = "n"
+                    loop_target_name = None
+                    if first_arg.generators:
+                        gen = first_arg.generators[0]
+                        if isinstance(gen.target, ast.Name):
+                            loop_target_name = gen.target.id
+                        if isinstance(gen.iter, ast.Call) and gen.iter.args:
+                            a0 = gen.iter.args[0]
+                            if isinstance(a0, ast.Name):
+                                outer_var = a0.id
 
-                if is_inner_param:
+                    # 1. Empty inner lists: sum([[] for _ in range(n)], []) -> Theta(k)
+                    if (isinstance(first_arg.elt, (ast.List, ast.Tuple)) and len(first_arg.elt.elts) == 0) or (
+                        isinstance(first_arg.elt, ast.Call)
+                        and isinstance(first_arg.elt.func, ast.Name)
+                        and first_arg.elt.func.id in ("list", "tuple")
+                        and len(first_arg.elt.args) == 0
+                    ):
+                        return (
+                            ComplexityClass.linear(outer_var),
+                            True,
+                            f"sum() with container start argument on {outer_var} empty inner lists evaluates in Theta({outer_var}) (zero elements copied, Theta({outer_var}) list allocation/dispatch operations: T(k) = Theta(k + sum sum 0) = Theta(k))",
+                        )
+
+                    # 2. Unequal / ragged inner lists depending on loop index (e.g. [0] * i or list(range(i)))
+                    is_ragged = False
+                    if loop_target_name:
+                        for n in ast.walk(first_arg.elt):
+                            if isinstance(n, ast.Name) and n.id == loop_target_name:
+                                is_ragged = True
+                                break
+                    if is_ragged:
+                        return (
+                            ComplexityClass.polynomial(3.0, outer_var),
+                            True,
+                            f"sum() with container start argument on {outer_var} ragged inner lists (l_i = {loop_target_name}) repeatedly concatenates in T({outer_var}) = Theta({outer_var} + sum_{{i=1}}^{{{outer_var}}} sum_{{j=1}}^i j) = Theta({outer_var}^3)",
+                        )
+
+                    # 3. Parameterized equal-size inner lists: [[0] * m for _ in range(k)]
+                    if isinstance(first_arg.elt, ast.BinOp) and isinstance(first_arg.elt.op, ast.Mult):
+                        inner_var = None
+                        if isinstance(first_arg.elt.left, ast.Name):
+                            inner_var = first_arg.elt.left.id
+                        elif isinstance(first_arg.elt.right, ast.Name):
+                            inner_var = first_arg.elt.right.id
+
+                        if inner_var and inner_var != outer_var:
+                            return (
+                                ComplexityClass.multi_variable(f"{inner_var}*{outer_var}^2"),
+                                True,
+                                f"sum() with container start argument on {outer_var} parameterized inner lists of length {inner_var} scales as Theta({outer_var} + {inner_var}*{outer_var}^2) = Theta({inner_var}*{outer_var}^2)",
+                            )
+                        return (
+                            ComplexityClass.polynomial(3.0, outer_var),
+                            True,
+                            f"sum() with container start argument on {outer_var} parameterized inner lists of length {outer_var} scales as Theta({outer_var} + {outer_var}*{outer_var}^2) = Theta({outer_var}^3)",
+                        )
+                    elif isinstance(first_arg.elt, ast.ListComp):
+                        return (
+                            ComplexityClass.polynomial(3.0, outer_var),
+                            True,
+                            f"sum() with container start argument on 2D nested comprehension scales as Theta({outer_var}^3)",
+                        )
+
+                    # 4. Fixed positive bounded inner lists: [[1, 2] for _ in range(n)]
                     return (
-                        ComplexityClass.polynomial(3.0),
+                        ComplexityClass.polynomial(2.0, outer_var),
                         True,
-                        "sum() with container start argument on parameterized 2D collection (k=n inner lists of length m=n) repeated concatenation scales as Theta(m * k^2) = O(n^3)",
+                        f"sum() with container start argument on {outer_var} inner lists of fixed bounded length c=O(1) repeatedly concatenates in T({outer_var}) = Theta({outer_var} + sum_{{i=1}}^{{{outer_var}}} sum_{{j=1}}^i l_j) = Theta({outer_var}^2)",
                     )
+
+                # 5. Literal constant nested list
+                if isinstance(first_arg, (ast.List, ast.Tuple)):
+                    return (
+                        ComplexityClass.constant(),
+                        True,
+                        "sum() on literal constant nested list concatenates bounded constant elements in O(1)",
+                    )
+
+                # 6. Generic / unannotated parameter: def flatten(nested): return sum(nested, [])
+                param_name = first_arg.id if isinstance(first_arg, ast.Name) else "nested"
                 return (
-                    ComplexityClass.polynomial(2.0),
-                    True,
-                    "sum() with container start argument repeatedly concatenates lists in T(k) = sum_{i=1}^k sum_{j=1}^i l_j. For k inner lists of bounded size m = O(1), this requires quadratic O(k^2) time. For equal-sized parameterized inner lists of length m, cost scales as Theta(m * k^2) (or O(n^3) when k = m = n).",
+                    ComplexityClass.unknown(f"unresolved inner list dimensions in sum({param_name}, [])"),
+                    False,
+                    f"sum() with container start argument on unannotated parameter '{param_name}' has unestablished inner list dimensions l_j; exact complexity Theta(k + sum_{{i=1}}^k sum_{{j=1}}^i l_j) requires known inner dimensions (verified lower bound Omega(k))",
                 )
 
         if fname in ("min", "max", "sum"):

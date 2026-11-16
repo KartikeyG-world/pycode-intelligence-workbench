@@ -404,78 +404,129 @@ class RecursionAnalyzer:
         """Detects whether this recursive function allocates heap structures per frame,
         and whether those allocations are deleted/released before recursive call(s) without surviving aliases or escaping.
         """
-        allocated_vars: Dict[str, ComplexityClass] = {}
-        deleted_vars_before_call: Set[str] = set()
-        aliased_vars: Dict[str, Set[str]] = {}
-        escaped_vars: Set[str] = set()
+        allocations: Dict[int, ComplexityClass] = {}
+        var_to_allocs: Dict[str, Set[int]] = {}
+        escaped_allocs: Set[int] = set()
+        next_alloc_id = 1
+
+        # Check parameter inputs that represent large container payloads (e.g. items, arr, data, values)
+        for param in func_node.args.args:
+            pname = param.arg
+            if any(kw in pname.lower() for kw in ("arr", "lst", "items", "data", "matrix", "grid", "nums", "seq", "values")):
+                aid = next_alloc_id
+                next_alloc_id += 1
+                allocations[aid] = ComplexityClass.linear("n")
+                var_to_allocs.setdefault(pname, set()).add(aid)
 
         for stmt in func_node.body:
-            # Check for explicit deletions: del x
+            # 1. Explicit deletion: del x, y
             if isinstance(stmt, ast.Delete):
                 for target in stmt.targets:
                     if isinstance(target, ast.Name):
-                        deleted_vars_before_call.add(target.id)
+                        var_to_allocs.pop(target.id, None)
 
-            # Check for assignments that allocate memory
+            # 2. Assignment: target = value
             elif isinstance(stmt, ast.Assign):
-                alloc_cost = self._evaluate_allocation_node(stmt.value)
-                if alloc_cost:
-                    for t in stmt.targets:
-                        if isinstance(t, ast.Name):
-                            allocated_vars[t.id] = alloc_cost
-                elif isinstance(stmt.value, ast.Name):
-                    # Alias assignment: alias = source_var
-                    src = stmt.value.id
-                    for t in stmt.targets:
-                        if isinstance(t, ast.Name):
-                            aliased_vars.setdefault(src, set()).add(t.id)
+                # Heap store: obj.attr = x or container[i] = x
+                is_heap_store = any(isinstance(t, (ast.Attribute, ast.Subscript)) for t in stmt.targets)
+                if is_heap_store:
+                    for child in ast.walk(stmt.value):
+                        if isinstance(child, ast.Name) and child.id in var_to_allocs:
+                            escaped_allocs.update(var_to_allocs[child.id])
+                else:
+                    alloc_cost = self._evaluate_allocation_node(stmt.value)
+                    if alloc_cost:
+                        aid = next_alloc_id
+                        next_alloc_id += 1
+                        allocations[aid] = alloc_cost
+                        for t in stmt.targets:
+                            if isinstance(t, ast.Name):
+                                var_to_allocs[t.id] = {aid}
+                    elif isinstance(stmt.value, ast.Name) and stmt.value.id in var_to_allocs:
+                        # Direct or chained aliasing: alias = source
+                        src_allocs = set(var_to_allocs[stmt.value.id])
+                        for t in stmt.targets:
+                            if isinstance(t, ast.Name):
+                                var_to_allocs[t.id] = set(src_allocs)
+                    else:
+                        # Reassignment to other value / None / literal
+                        for t in stmt.targets:
+                            if isinstance(t, ast.Name):
+                                var_to_allocs.pop(t.id, None)
+
+            # 3. Annotated assignment: target: Type = value
             elif isinstance(stmt, ast.AnnAssign) and stmt.value:
-                alloc_cost = self._evaluate_allocation_node(stmt.value)
-                if alloc_cost and isinstance(stmt.target, ast.Name):
-                    allocated_vars[stmt.target.id] = alloc_cost
-                elif isinstance(stmt.value, ast.Name) and isinstance(stmt.target, ast.Name):
-                    aliased_vars.setdefault(stmt.value.id, set()).add(stmt.target.id)
+                if isinstance(stmt.target, (ast.Attribute, ast.Subscript)):
+                    for child in ast.walk(stmt.value):
+                        if isinstance(child, ast.Name) and child.id in var_to_allocs:
+                            escaped_allocs.update(var_to_allocs[child.id])
+                else:
+                    alloc_cost = self._evaluate_allocation_node(stmt.value)
+                    if alloc_cost and isinstance(stmt.target, ast.Name):
+                        aid = next_alloc_id
+                        next_alloc_id += 1
+                        allocations[aid] = alloc_cost
+                        var_to_allocs[stmt.target.id] = {aid}
+                    elif isinstance(stmt.value, ast.Name) and stmt.value.id in var_to_allocs and isinstance(stmt.target, ast.Name):
+                        var_to_allocs[stmt.target.id] = set(var_to_allocs[stmt.value.id])
+                    elif isinstance(stmt.target, ast.Name):
+                        var_to_allocs.pop(stmt.target.id, None)
 
-            # Check escaping to globals, outer scopes, containers, or return/yield
-            if isinstance(stmt, (ast.Global, ast.Nonlocal)):
+            # 4. Global / Nonlocal
+            elif isinstance(stmt, (ast.Global, ast.Nonlocal)):
                 for name in stmt.names:
-                    escaped_vars.add(name)
-            elif isinstance(stmt, ast.Return) and stmt.value:
-                for child in ast.walk(stmt.value):
-                    if isinstance(child, ast.Name):
-                        escaped_vars.add(child.id)
-            elif isinstance(stmt, (ast.Yield, ast.YieldFrom)):
-                val = stmt.value
-                if val:
-                    for child in ast.walk(val):
-                        if isinstance(child, ast.Name):
-                            escaped_vars.add(child.id)
+                    if name in var_to_allocs:
+                        escaped_allocs.update(var_to_allocs[name])
 
-            # Check container appends / insertions: container.append(x)
+            # 5. Method and external calls: container appends or unknown function invocations
             for child in ast.walk(stmt):
-                if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
-                    if child.func.attr in ("append", "extend", "insert", "add", "update"):
+                if isinstance(child, ast.Call):
+                    if isinstance(child.func, ast.Attribute) and child.func.attr in ("append", "extend", "insert", "add", "update"):
                         for a in child.args:
-                            if isinstance(a, ast.Name):
-                                escaped_vars.add(a.id)
+                            if isinstance(a, ast.Name) and a.id in var_to_allocs:
+                                escaped_allocs.update(var_to_allocs[a.id])
+                    cname = ""
+                    if isinstance(child.func, ast.Name):
+                        cname = child.func.id
+                    elif isinstance(child.func, ast.Attribute):
+                        cname = child.func.attr
+                    # Conservative escape: passing an allocated object to an external/unresolved call escapes it
+                    if cname not in ("len", "id", "type", "print", func_name):
+                        for a in child.args:
+                            for sub in ast.walk(a):
+                                if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                    escaped_allocs.update(var_to_allocs[sub.id])
 
-        if not allocated_vars:
+        # 6. Check all return and yield statements across branches for returned allocations (which escape into caller/cache)
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Return) and node.value:
+                alloc_cost = self._evaluate_allocation_node(node.value)
+                if alloc_cost:
+                    aid = next_alloc_id
+                    next_alloc_id += 1
+                    allocations[aid] = alloc_cost
+                    escaped_allocs.add(aid)
+                for child in ast.walk(node.value):
+                    if isinstance(child, ast.Name) and child.id in var_to_allocs:
+                        escaped_allocs.update(var_to_allocs[child.id])
+            elif isinstance(node, (ast.Yield, ast.YieldFrom)) and node.value:
+                for child in ast.walk(node.value):
+                    if isinstance(child, ast.Name) and child.id in var_to_allocs:
+                        escaped_allocs.update(var_to_allocs[child.id])
+
+        if not allocations:
             return None, False
 
-        max_alloc = max(allocated_vars.values(), key=lambda c: c.rank_score())
+        max_alloc = max(allocations.values(), key=lambda c: c.rank_score())
 
-        # Verify reachability: an object is released only if the variable is deleted,
-        # has not escaped into a container/closure/global, and all its aliases are also deleted.
+        # An allocation is released if and only if it has not escaped and no live variable references it
         all_released = True
-        for v in allocated_vars:
-            if v not in deleted_vars_before_call:
+        for aid in allocations:
+            if aid in escaped_allocs:
                 all_released = False
                 break
-            if v in escaped_vars:
-                all_released = False
-                break
-            surviving_aliases = [a for a in aliased_vars.get(v, set()) if a not in deleted_vars_before_call]
-            if surviving_aliases:
+            surviving = [v for v, aids in var_to_allocs.items() if aid in aids]
+            if surviving:
                 all_released = False
                 break
 

@@ -398,8 +398,10 @@ def total(values):
     assert res.analysis_complete
 
 
-def test_24_sum_with_container_start_argument_quadratic_time(analyzer: ComplexityAnalyzer):
-    """Test 24: sum(nested_lists, []) concatenates lists in quadratic O(n²) time."""
+def test_24_sum_with_container_start_argument_generic_parameter_partial(analyzer: ComplexityAnalyzer):
+    """Test 24: sum(nested_lists, []) on unannotated parameter has unestablished inner dimensions l_j;
+    reports PARTIAL / Unknown with verified O(n) known lower bound rather than assuming O(n²).
+    """
     code = """
 def flatten(nested_lists):
     return sum(nested_lists, [])
@@ -407,8 +409,11 @@ def flatten(nested_lists):
     tree = ast.parse(code)
     res = analyzer.analyze(tree)
 
-    assert res.time_complexity == "O(n²)"
-    assert res.analysis_complete
+    assert res.analysis_status == "PARTIAL"
+    assert not res.analysis_complete
+    assert "Unknown" in res.time_complexity
+    assert res.known_time_complexity == "O(n)"
+    assert any(u["operation"] == "sum" for u in res.unresolved_costs)
 
 
 # ==============================================================================
@@ -860,3 +865,239 @@ def test_49_unresolved_cost_item_structured_validation():
     assert item["operation"] == "custom_method"
     assert item["loop_depth"] == 2
     assert item.line == 15
+
+
+# ==============================================================================
+# 9. RESIDUAL CORRECTNESS RECONCILIATION TESTS (Tests 50 - 61)
+# ==============================================================================
+
+
+def test_50_sum_empty_inner_lists_linear(analyzer: ComplexityAnalyzer):
+    """Test 50: sum([[] for _ in range(n)], []) takes Theta(n) linear time, not zero or quadratic."""
+    code = """
+def flatten_empty(n):
+    return sum([[] for _ in range(n)], [])
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n)"
+    assert res.tight_bound == "Θ(n)"
+    assert res.analysis_complete
+
+
+def test_51_sum_independent_parameterized_dimensions(analyzer: ComplexityAnalyzer):
+    """Test 51: sum([[0] * m for _ in range(k)], []) scales as Theta(m * k^2) with independent variables."""
+    code = """
+def flatten_rect(k, m):
+    return sum([[0] * m for _ in range(k)], [])
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(m*k^2)"
+    assert res.tight_bound == "Θ(m*k^2)"
+    assert res.analysis_complete
+
+
+def test_52_sum_ragged_inner_lists_cubic(analyzer: ComplexityAnalyzer):
+    """Test 52: sum([[0] * i for i in range(n)], []) has ragged inner lists l_i = i scaling as Theta(n^3)."""
+    code = """
+def flatten_triangular(n):
+    return sum([[0] * i for i in range(n)], [])
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n³)"
+    assert res.tight_bound == "Θ(n³)"
+    assert res.analysis_complete
+
+
+def test_53_memoized_grid_with_local_work_cubic(analyzer: ComplexityAnalyzer):
+    """Test 53: Grid recursion with O(n) local loop per state computes total execution time
+    T_total = sum_{s in R} T_local(s) = O(i*j) * O(n) = O(n*i*j), distinguishing state count from total work.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def grid_with_loop(i, j):
+    if i <= 0 or j <= 0:
+        return 0
+    total = 0
+    for k in range(n):
+        total += k
+    return total + grid_with_loop(i - 1, j) + grid_with_loop(i, j - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n*i*j)"
+    assert res.tight_bound == "Θ(n*i*j)"
+    assert res.recurrence.is_solved
+    assert any("State space cardinality is bounded by distinct reachable states: |R| = Θ(i*j)" in step for step in res.recurrence.derivation_steps)
+    assert any("Local non-recursive work per state: T_local(s) = O(n)" in step for step in res.recurrence.derivation_steps)
+
+
+def test_54_memoized_large_returned_array_bounded_cache(analyzer: ComplexityAnalyzer):
+    """Test 54: @lru_cache(maxsize=128) returning an O(n) array retains O(n) byte-memory
+    even though entry count is bounded to O(1).
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def get_row(n):
+    if n <= 0:
+        return [0] * n
+    return get_row(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_55_memoized_large_container_arg_bounded_cache(analyzer: ComplexityAnalyzer):
+    """Test 55: @lru_cache(maxsize=128) with large container parameter (arr) retains O(n) argument key memory."""
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def solve_arr(arr, i):
+    if i <= 0:
+        return 0
+    return solve_arr(arr, i - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.cache_retained == "O(n)"
+
+
+def test_56_multilevel_alias_surviving_deletion_retains_heap(analyzer: ComplexityAnalyzer):
+    """Test 56: Multi-level alias chain b = a; c = b; del a; del b does NOT release heap
+    because c still holds a reference to the allocated object; retains O(n^2).
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    a = [0] * n
+    b = a
+    c = b
+    del a
+    del b
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_57_multilevel_alias_all_deleted_bounds_heap(analyzer: ComplexityAnalyzer):
+    """Test 57: When ALL aliases in a chain are deleted before recursive call, heap is released to single frame O(n)."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    a = [0] * n
+    b = a
+    c = b
+    del a
+    del b
+    del c
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_58_alias_reassigned_bounds_heap(analyzer: ComplexityAnalyzer):
+    """Test 58: Reassigning an alias b = None before deleting the original releases the allocation."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    a = [0] * n
+    b = a
+    b = None
+    del a
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_59_external_call_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 59: Passing local allocation to an unresolved external call conservatively marks it as escaped; retains O(n^2)."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    external_consume(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_60_attribute_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 60: Storing local allocation into self.attr or container index escapes it; retains O(n^2)."""
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    self.stored = temp
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_61_unresolved_cost_item_mapping_interface():
+    """Test 61: Full collections.abc.Mapping interface test for UnresolvedCostItem."""
+    from collections.abc import Mapping
+    from app.schemas.analysis import UnresolvedCostItem
+
+    item = UnresolvedCostItem(
+        operation="custom_dispatch",
+        line=42,
+        context="loop",
+        loop_depth=3,
+        reason="unresolved dynamic method",
+    )
+
+    assert isinstance(item, Mapping)
+    assert item["operation"] == "custom_dispatch"
+    assert item.get("operation") == "custom_dispatch"
+    assert item.get("missing_key", "default_val") == "default_val"
+    assert "operation" in item
+    assert "missing" not in item
+    assert set(item.keys()) == {"operation", "line", "context", "loop_depth", "reason"}
+    assert set(item.values()) == {"custom_dispatch", 42, "loop", 3, "unresolved dynamic method"}
+    assert len(item) == 5
+    assert dict(item)["operation"] == "custom_dispatch"
+    dump = item.model_dump()
+    assert dump["operation"] == "custom_dispatch"
+    assert "custom_dispatch" in item.model_dump_json()

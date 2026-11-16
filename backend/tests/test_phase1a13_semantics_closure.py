@@ -1833,3 +1833,154 @@ def process(n):
     res = analyzer.analyze(tree)
     assert res.space_breakdown.peak_live_heap == "O(n²)"
     assert res.space_complexity == "O(n²)"
+
+
+def test_98_multidimensional_dominant_of_incomparable_exponents_same_vars():
+    """Test 98: Dominance for incomparable exponent vectors with the same variable set:
+    O(n^2*m) and O(n*m^3) neither dominates uniformly across all independent n, m,
+    so both Pareto-optimal terms are preserved in the asymptotic sum.
+    """
+    c1 = ComplexityClass.from_big_o("O(n^2m)")
+    c2 = ComplexityClass.from_big_o("O(nm^3)")
+    dom1 = ComplexityClass.dominant_of(c1, c2)
+    assert dom1.big_o in ("O(n^2m + nm^3)", "O(n²*m + n*m³)", "O(nm^3 + n^2m)", "O(n*m³ + n²*m)")
+
+    c3 = ComplexityClass.from_big_o("O(n²*m)")
+    c4 = ComplexityClass.from_big_o("O(n*m³)")
+    dom2 = ComplexityClass.dominant_of(c3, c4)
+    assert dom2.big_o in ("O(n²*m + n*m³)", "O(n^2m + nm^3)", "O(n*m³ + n²*m)")
+
+
+def test_99_multidimensional_dominant_of_comparable_exponents_same_vars():
+    """Test 99: Dominance for comparable exponent vectors with the same variable set:
+    O(n^3*m) component-wise dominates O(n^2*m) because exp(n): 3 >= 2 and exp(m): 1 >= 1.
+    """
+    c1 = ComplexityClass.from_big_o("O(n^2m)")
+    c2 = ComplexityClass.from_big_o("O(n^3m)")
+    dom1 = ComplexityClass.dominant_of(c1, c2)
+    assert dom1.big_o in ("O(n^3m)", "O(n³*m)")
+
+    c3 = ComplexityClass.from_big_o("O(n²*m)")
+    c4 = ComplexityClass.from_big_o("O(n³*m)")
+    dom2 = ComplexityClass.dominant_of(c3, c4)
+    assert dom2.big_o in ("O(n³*m)", "O(n^3m)")
+
+
+def test_100_cache_cross_role_alias_different_variable_names(analyzer: ComplexityAnalyzer):
+    """Test 100: Case A - Cache cross-role alias identity when argument and return use different variable names.
+    solve(n, shared) with alias = shared; return alias references the exact same underlying heap container,
+    deduplicated to O(n) cache retained memory.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, shared):
+    if n <= 0:
+        alias = shared
+        return alias
+    return solve(n - 1, shared)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_101_cache_cross_role_wrapper_around_shared_payload(analyzer: ComplexityAnalyzer):
+    """Test 101: Case B - Cache cross-role wrapper: return (shared,) distinguishes O(1) entry wrapper
+    from O(n) shared payload, deduplicating shared payload to single O(n) heap memory without multiplying by |R|.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, shared):
+    if n <= 0:
+        return (shared,)
+    return solve(n - 1, shared)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_102_cache_cross_role_nested_container_wrapper(analyzer: ComplexityAnalyzer):
+    """Test 102: Case C - Cache cross-role nested container wrapper: return {"payload": [shared]}
+    constant-overhead literal wrapper containers enclosing shared payload deduplicate to O(n) cache memory.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, shared):
+    if n <= 0:
+        return {"payload": [shared]}
+    return solve(n - 1, shared)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_103_cache_fresh_return_allocation_accumulates(analyzer: ComplexityAnalyzer):
+    """Test 103: Case D - Fresh return allocation: return [0] * n allocates a distinct container per state,
+    accumulating |R| * O(n) = O(n^2) cache retained memory.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, shared):
+    if n <= 0:
+        return [0] * n
+    return solve(n - 1, shared)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.cache_retained == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_104_pep695_type_alias_shadows_builtin(analyzer: ComplexityAnalyzer):
+    """Test 104: Python 3.12+ PEP 695 type alias statement `type len = int` acts as a name binding
+    that shadows built-in len, conservatively treating len as potentially impure/escaping.
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    type len = int
+    temp = [0] * n
+    x = len(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_105_builtins_mutation_marks_uncertain_and_escapes(analyzer: ComplexityAnalyzer):
+    """Test 105: Direct mutation of builtins (e.g. builtins.len = ...) marks built-in state uncertain,
+    conservatively treating all built-in calls as escaping.
+    """
+    code = """
+import builtins
+
+def process(n):
+    if n <= 0:
+        return 0
+    builtins.len = lambda x: 0
+    temp = [0] * n
+    x = len(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"

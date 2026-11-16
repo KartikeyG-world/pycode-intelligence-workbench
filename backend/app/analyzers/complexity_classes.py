@@ -127,7 +127,8 @@ class ComplexityClass:
             return cls.unsupported()
         if "Unknown" in inner:
             return cls.unknown(inner)
-        return cls("custom", custom_str=inner, is_tight=tight)
+        all_v = tuple(sorted(cls._extract_monomial_exponents(inner).keys()))
+        return cls("custom", custom_str=inner, variables=all_v or ("n",), is_tight=tight)
 
     @property
     def big_o(self) -> str:
@@ -243,18 +244,68 @@ class ComplexityClass:
         return self.big_o == other.big_o
 
     @classmethod
+    def _extract_monomial_exponents(cls, s: str) -> Dict[str, float]:
+        sup_map = {"²": 2.0, "³": 3.0, "⁴": 4.0, "⁵": 5.0}
+        clean = re.sub(r"\blog\b(?:\s*\([^\)]*\)|\s+[a-zA-Z])?", "", s).strip()
+        exps: Dict[str, float] = {}
+        for var, p_num, p_sup in re.findall(r"([a-zA-Z])(?:\^(\d+(?:\.\d+)?)|([²³⁴⁵⁶⁷⁸⁹]))?", clean):
+            if var in ("O", "Θ", "Theta"):
+                continue
+            deg = float(p_num) if p_num else (sup_map.get(p_sup, 1.0) if p_sup else 1.0)
+            exps[var] = exps.get(var, 0.0) + deg
+        return exps
+
+    @classmethod
     def _get_class_vars(cls, c: "ComplexityClass") -> Set[str]:
         if c.category == "constant":
             return set()
+        raw = c._raw_expression()
+        exps = cls._extract_monomial_exponents(raw)
+        if exps:
+            return set(exps.keys())
         if c.category != "custom" and c.variables:
             return set(c.variables)
-        raw = c._raw_expression()
-        tokens = set(re.findall(r"[a-zA-Z_]\w*", raw)) - {
-            "log", "sqrt", "sin", "cos", "min", "max", "Theta", "O", "Unknown", "Unsupported"
-        }
-        if tokens:
-            return tokens
         return set(c.variables) if c.variables else {"n"}
+
+    @classmethod
+    def _monomial_dominates(cls, c_b: "ComplexityClass", c_a: "ComplexityClass") -> bool:
+        """Determines whether monomial/class B component-wise dominates monomial/class A
+        over all independent variables v in vars(A) U vars(B).
+        """
+        if c_a.category == "constant":
+            return True
+        if c_b.category == "constant":
+            return False
+
+        hier = {"constant": 0, "logarithmic": 1, "linear": 2, "linearithmic": 3, "polynomial": 4, "exponential": 5, "factorial": 6}
+        cat_a = c_a.category if c_a.category != "custom" else "polynomial"
+        cat_b = c_b.category if c_b.category != "custom" else "polynomial"
+        vars_a = cls._get_class_vars(c_a)
+        vars_b = cls._get_class_vars(c_b)
+
+        if hier.get(cat_b, 4) > hier.get(cat_a, 4) and (not vars_a or vars_a == vars_b or vars_a.issubset(vars_b)):
+            return True
+        if hier.get(cat_a, 4) > hier.get(cat_b, 4) and (not vars_b or vars_b == vars_a or vars_b.issubset(vars_a)):
+            return False
+
+        exp_a = cls._extract_monomial_exponents(c_a._raw_expression())
+        exp_b = cls._extract_monomial_exponents(c_b._raw_expression())
+        vars_all = set(exp_a.keys()) | set(exp_b.keys())
+        if not vars_all:
+            return c_b.rank_score() >= c_a.rank_score()
+
+        # Unparameterized dummy placeholder 'n' subsumed by multi-variable expression of >= degree
+        if set(exp_a.keys()) == {"n"} and len(exp_b.keys()) >= 2:
+            if sum(exp_b.values()) >= sum(exp_a.values()):
+                return True
+
+        # Component-wise dominance: for every independent variable v, exp_b(v) >= exp_a(v)
+        if all(exp_b.get(v, 0.0) >= exp_a.get(v, 0.0) for v in vars_all):
+            if all(exp_b.get(v, 0.0) == exp_a.get(v, 0.0) for v in vars_all):
+                return c_b.log_degree >= c_a.log_degree
+            return True
+
+        return False
 
     @classmethod
     def _scale_var_in_expression(cls, c: "ComplexityClass", var: str, add_deg: int) -> "ComplexityClass":
@@ -288,59 +339,54 @@ class ComplexityClass:
         if len(non_constants) == 1:
             return non_constants[0]
 
-        # Check if all classes share the identical variable set
-        var_sets = [cls._get_class_vars(c) for c in non_constants]
-        first_vs = var_sets[0]
-        if all(vs == first_vs for vs in var_sets):
-            return max(non_constants, key=lambda c: c.rank_score())
-
-        # Multidimensional composition across independent dimensions:
-        # Group non-constant classes by their variable sets
-        groups: Dict[Tuple[str, ...], List["ComplexityClass"]] = {}
+        # Decompose any sum expressions into atomic constituent terms
+        atomic_terms: List["ComplexityClass"] = []
         for c in non_constants:
-            vk = tuple(sorted(cls._get_class_vars(c)))
-            groups.setdefault(vk, []).append(c)
+            raw = c._raw_expression()
+            if " + " in raw:
+                for sub in raw.split("+"):
+                    clean_sub = sub.strip()
+                    if clean_sub:
+                        atomic_terms.append(cls.from_big_o(f"O({clean_sub})", is_tight=c.is_tight))
+            else:
+                atomic_terms.append(c)
 
-        # For each variable set, select the dominant representative
-        candidates = [max(g, key=lambda c: c.rank_score()) for g in groups.values()]
-
-        # Subsumption check among candidates:
-        # e.g., O(n) is subsumed by O(n*m) when n, m >= 1
+        # Component-wise Pareto dominance: eliminate any term dominated by another
         surviving: List["ComplexityClass"] = []
-        for i, cand in enumerate(candidates):
-            c_vars = cls._get_class_vars(cand)
+        for i, cand in enumerate(atomic_terms):
             subsumed = False
-            for j, other in enumerate(candidates):
+            for j, other in enumerate(atomic_terms):
                 if i == j:
                     continue
-                o_vars = cls._get_class_vars(other)
-                if c_vars and o_vars and c_vars.issubset(o_vars) and c_vars != o_vars:
-                    if other.rank_score() >= cand.rank_score():
-                        subsumed = True
-                        break
-                # Generic unparameterized placeholder 'n' subsumed by higher/equal degree multi-variable term
-                if len(c_vars) == 1 and "n" in c_vars and len(o_vars) >= 2:
-                    if other.rank_score() >= cand.rank_score():
+                if cls._monomial_dominates(other, cand):
+                    # If mutually dominant (equivalent), keep only one (smaller index)
+                    if cls._monomial_dominates(cand, other):
+                        if j < i:
+                            subsumed = True
+                            break
+                    else:
                         subsumed = True
                         break
             if not subsumed:
-                surviving.append(cand)
+                if not any(s.big_o == cand.big_o for s in surviving):
+                    surviving.append(cand)
 
         if len(surviving) == 1:
             return surviving[0]
 
-        # Incomparable independent dimensions: preserve the sum of their asymptotic terms
-        def _sort_key(c: "ComplexityClass") -> Tuple[int, str]:
-            cv = sorted(cls._get_class_vars(c))
-            first = cv[0] if cv else ""
-            priority = 0 if "n" in cv else (1 if "m" in cv else 2)
-            return (priority, first)
+        # Incomparable independent dimensions: sort deterministically and join with " + "
+        def _sort_key(c: "ComplexityClass") -> Tuple[float, float, str]:
+            exp = cls._extract_monomial_exponents(c._raw_expression())
+            n_deg = exp.get("n", -1.0)
+            tot_deg = sum(exp.values())
+            return (-n_deg, -tot_deg, c._raw_expression())
 
         sorted_survivors = sorted(surviving, key=_sort_key)
         expr_terms = [c._raw_expression() for c in sorted_survivors]
         all_vars = tuple(sorted(set.union(*[cls._get_class_vars(c) for c in sorted_survivors])))
         combined_expr = " + ".join(expr_terms)
-        return cls("custom", custom_str=combined_expr, variables=all_vars)
+        tight = all(c.is_tight for c in sorted_survivors)
+        return cls("custom", custom_str=combined_expr, variables=all_vars, is_tight=tight)
 
     @classmethod
     def multiply(cls, c1: "ComplexityClass", c2: "ComplexityClass") -> "ComplexityClass":

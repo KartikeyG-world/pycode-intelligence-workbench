@@ -400,7 +400,7 @@ def total(values):
 
 def test_24_sum_with_container_start_argument_generic_parameter_partial(analyzer: ComplexityAnalyzer):
     """Test 24: sum(nested_lists, []) on unannotated parameter has unestablished inner dimensions l_j;
-    reports PARTIAL / Unknown with verified O(n) known lower bound rather than assuming O(n²).
+    reports PARTIAL / Unknown with modeled outer work contribution O(n) and proven lower bound Omega(n) rather than assuming O(n²).
     """
     code = """
 def flatten(nested_lists):
@@ -1101,3 +1101,253 @@ def test_61_unresolved_cost_item_mapping_interface():
     dump = item.model_dump()
     assert dump["operation"] == "custom_dispatch"
     assert "custom_dispatch" in item.model_dump_json()
+
+
+# ==============================================================================
+# 11. ESCAPE SAFETY, CACHE MEMORY PRECISION & LOOKUP COMPLEXITY (Tests 62 - 72)
+# ==============================================================================
+
+
+def test_62_self_recursive_call_escapes_argument_allocation(analyzer: ComplexityAnalyzer):
+    """Test 62: Passing a local allocation to a self-recursive call escapes it into the callee frame;
+    heap memory cannot be freed before child execution completes, retaining O(n^2) peak live heap.
+    """
+    code = """
+def process(n, temp=None):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    res = process(n - 1, temp)
+    del temp
+    return res
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_63_print_custom_stream_escapes_allocation(analyzer: ComplexityAnalyzer):
+    """Test 63: print(temp, file=custom_writer) escapes the allocated object to an external stream writer;
+    del temp does not ensure release, retaining O(n^2) peak live heap across n frames.
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    print(temp, file=custom_log_stream)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_64_print_standard_builtin_is_non_escaping(analyzer: ComplexityAnalyzer):
+    """Test 64: print(temp) to standard stdout does not escape or retain references to built-in list;
+    after del temp before recursive invocation, peak live heap is bounded by a single frame O(n).
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    print(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_65_len_builtin_is_non_escaping(analyzer: ComplexityAnalyzer):
+    """Test 65: len(temp) on a built-in list reads container size without escaping references;
+    after del temp before recursive invocation, peak live heap is bounded by a single frame O(n).
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    k = len(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_66_case_a_shared_argument_retains_linear_cache_memory(analyzer: ComplexityAnalyzer):
+    """Test 66: Case A - Shared argument tuple passed into cache entries retains O(n) total heap memory,
+    not O(n^2), because all |R| = O(n) cache keys hold pointers to the identical pre-existing shared object.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, shared):
+    if n <= 0:
+        return 0
+    return solve(n - 1, shared) + shared[n % len(shared)]
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n)"
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"
+    assert any("share references to external/passed argument payload" in step for step in res.recurrence.derivation_steps)
+
+
+def test_67_case_b_unique_argument_allocation_per_state_quadratic(analyzer: ComplexityAnalyzer):
+    """Test 67: Case B - Unique argument tuples allocated per state (new_path = path + (n,))
+    retain distinct O(n) payloads per cache entry, accumulating to O(n^2) total retained cache memory.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, path):
+    if n <= 0:
+        return 0
+    new_path = path + (n,)
+    return solve(n - 1, new_path)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n)"
+    assert res.space_breakdown.cache_retained == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+    assert any("unique freshly allocated argument payload" in step for step in res.recurrence.derivation_steps)
+
+
+def test_68_case_c_shared_return_object_retains_linear_cache_memory(analyzer: ComplexityAnalyzer):
+    """Test 68: Case C - Returning a shared container object (shared_result) stores identical object references
+    across all |R| = O(n) cache entries, retaining O(n) total heap memory, not O(n^2).
+    """
+    code = """
+from functools import lru_cache
+
+shared_result = [0] * n
+
+@lru_cache(maxsize=None)
+def solve(n):
+    if n <= 0:
+        return shared_result
+    return solve(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n)"
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"
+    assert any("store references to a shared return object" in step for step in res.recurrence.derivation_steps)
+
+
+def test_69_case_d_unique_return_allocations_per_state_quadratic(analyzer: ComplexityAnalyzer):
+    """Test 69: Case D - Unique return allocations created per state (return [0] * n fresh)
+    store distinct O(n) payloads per cache entry in unbounded cache, retaining O(n^2) total heap memory.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n):
+    if n <= 0:
+        return [0] * n
+    res = solve(n - 1)
+    return [0] * n
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n)"
+    assert res.space_breakdown.cache_retained == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+    assert any("unique freshly allocated return payload" in step for step in res.recurrence.derivation_steps)
+
+
+def test_70_case_e_bounded_cache_unique_return_allocations_linear(analyzer: ComplexityAnalyzer):
+    """Test 70: Case E - Bounded cache (@lru_cache(maxsize=128)) with unique return allocations
+    bounds table entry count to O(1), but retains O(n) byte-memory because each entry retains an O(n) list.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def solve(n):
+    if n <= 0:
+        return [0] * n
+    res = solve(n - 1)
+    return [0] * n
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n)"
+    assert res.space_breakdown.cache_retained == "O(n)"
+    assert res.space_complexity == "O(n)"
+    assert any("fixed LRU capacity bounds table entry count to O(1)" in step for step in res.recurrence.derivation_steps)
+
+
+def test_71_cache_lookup_complexity_derivation_qualification(analyzer: ComplexityAnalyzer):
+    """Test 71: Memoized derivation explicitly qualifies O(1) lookup overhead as conditional
+    on standard hash-table collision-free assumptions and primitive scalar key hashing/equality,
+    disclosing that container keys of size k require O(k) hashing and comparison operations.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def memoized_solver(n):
+    if n <= 1:
+        return 1
+    return memoized_solver(n - 1) + memoized_solver(n - 2)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.recurrence.is_solved
+    lookup_steps = [s for s in res.recurrence.derivation_steps if "expected O(1) cache lookup overhead" in s]
+    assert len(lookup_steps) == 1
+    step = lookup_steps[0]
+    assert "conditional on standard hash-table collision-free assumptions" in step
+    assert "primitive scalar key hashing and equality comparison" in step
+    assert "compound or sequence keys of dimension k require O(k) hashing and equality comparison" in step
+
+
+def test_72_generic_sum_notation_and_input_model_separation(analyzer: ComplexityAnalyzer):
+    """Test 72: Generic sum(nested, []) explanation explicitly separates proven lower bound Omega(k)
+    from modeled outer contribution O(k) and unproven total complexity Unknown, documenting the
+    input model assumption of a finite iterable containing compatible built-in list objects.
+    """
+    code = """
+def flatten(nested):
+    return sum(nested, [])
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.analysis_status == "PARTIAL"
+    assert "Unknown" in res.time_complexity
+    assert res.known_time_complexity == "O(n)"
+    unresolved_sum = [u for u in res.unresolved_costs if u.get("operation") == "sum"]
+    assert len(unresolved_sum) == 1
+    reason = unresolved_sum[0]["reason"]
+    assert "proven lower bound of Omega(k)" in reason
+    assert "modeled outer work contribution of O(k)" in reason
+    assert "statically Unknown because inner sublist lengths l_j are unconstrained" in reason
+    assert "finite iterable containing compatible built-in Python list objects" in reason

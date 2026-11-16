@@ -23,6 +23,12 @@ class RecurrenceRelation:
         is_bounded_cache: bool = False,
         local_allocation_work: Optional[ComplexityClass] = None,
         allocation_released_before_recursion: bool = False,
+        has_shared_argument: bool = False,
+        has_unique_argument_allocation: bool = False,
+        has_shared_return_object: bool = False,
+        has_fresh_return_allocation: bool = False,
+        argument_payload_class: Optional[ComplexityClass] = None,
+        return_payload_class: Optional[ComplexityClass] = None,
     ):
         self.func_name = func_name
         self.branching_factor = branching_factor
@@ -39,6 +45,12 @@ class RecurrenceRelation:
         self.is_bounded_cache = is_bounded_cache
         self.local_allocation_work = local_allocation_work
         self.allocation_released_before_recursion = allocation_released_before_recursion
+        self.has_shared_argument = has_shared_argument
+        self.has_unique_argument_allocation = has_unique_argument_allocation
+        self.has_shared_return_object = has_shared_return_object
+        self.has_fresh_return_allocation = has_fresh_return_allocation
+        self.argument_payload_class = argument_payload_class
+        self.return_payload_class = return_payload_class
 
         # Output derivation artifacts
         self.is_solved: bool = False
@@ -437,39 +449,108 @@ class RecurrenceSolver:
             rel.solved_complexity = state_class
             rel.traversal_complexity = state_class
 
-        # Check cache memory
-        ret_alloc = rel.local_allocation_work
+        # Check cache memory accounting:
+        # Case A: Shared argument tuple passed into cache entries -> O(n) total retained heap
+        # Case B: Unique argument tuples allocated per call/state -> O(n^2) total retained heap in unbounded cache
+        # Case C: Shared return object -> O(n) total retained heap
+        # Case D: Unique return allocations per call/state -> O(n^2) total retained heap in unbounded cache
+        # Case E: Bounded cache (fixed LRU capacity K) -> O(1) entries, but retained payload memory scales with O(n)
+        has_fresh_ret = rel.has_fresh_return_allocation
+        has_shared_ret = rel.has_shared_return_object
+        has_unique_arg = rel.has_unique_argument_allocation
+        has_shared_arg = rel.has_shared_argument
+
+        ret_payload = rel.return_payload_class
+        arg_payload = rel.argument_payload_class
+
+        if not ret_payload and rel.local_allocation_work and rel.local_allocation_work > ComplexityClass.constant():
+            ret_payload = rel.local_allocation_work
+            if not has_fresh_ret and not has_shared_ret and not has_unique_arg and not has_shared_arg:
+                has_fresh_ret = True
+
         if rel.is_bounded_cache:
-            if ret_alloc and ret_alloc > ComplexityClass.constant():
-                rel.cache_retained_class = ret_alloc
+            # Case E: Fixed LRU capacity bounds entry count to O(1), while retained payload memory scales with O(n)
+            if has_fresh_ret and ret_payload and ret_payload > ComplexityClass.constant():
+                rel.cache_retained_class = ret_payload
+            elif has_unique_arg and arg_payload and arg_payload > ComplexityClass.constant():
+                rel.cache_retained_class = arg_payload
+            elif has_shared_ret and ret_payload and ret_payload > ComplexityClass.constant():
+                rel.cache_retained_class = ret_payload
+            elif has_shared_arg and arg_payload and arg_payload > ComplexityClass.constant():
+                rel.cache_retained_class = arg_payload
             else:
                 rel.cache_retained_class = ComplexityClass.constant()
             rel.auxiliary_space_class = ComplexityClass.dominant_of(rel.active_frames_class, rel.cache_retained_class)
             rel.total_retained_space_class = rel.auxiliary_space_class
+            entry_count_desc = "Bounded by fixed LRU capacity (O(1) entries)"
+            mem_note = (
+                f"Retained byte-memory: {rel.cache_retained_class.big_o} "
+                "(Note: fixed LRU capacity bounds table entry count to O(1), "
+                "while retained byte-memory scales with payload sizes retained across cached entries)."
+            )
         else:
-            if ret_alloc and ret_alloc > ComplexityClass.constant():
-                cache_mem = ComplexityClass.multiply(state_class, ret_alloc)
+            # Unbounded cache: entry count is |R| = state_class
+            if has_fresh_ret and ret_payload and ret_payload > ComplexityClass.constant():
+                # Case D: Distinct fresh return allocation per state
+                cache_mem = ComplexityClass.multiply(state_class, ret_payload)
+                mem_note = (
+                    f"Retained byte-memory: {cache_mem.big_o} "
+                    "(Note: each distinct cache entry value stores a unique freshly allocated return payload; "
+                    f"across |R| reachable states, retained memory accumulates to {cache_mem.big_o})."
+                )
+            elif has_unique_arg and arg_payload and arg_payload > ComplexityClass.constant():
+                # Case B: Distinct fresh argument allocation per state
+                cache_mem = ComplexityClass.multiply(state_class, arg_payload)
+                mem_note = (
+                    f"Retained byte-memory: {cache_mem.big_o} "
+                    "(Note: each distinct cache entry key retains a unique freshly allocated argument payload; "
+                    f"across |R| reachable states, retained memory accumulates to {cache_mem.big_o})."
+                )
+            elif has_shared_ret and ret_payload and ret_payload > ComplexityClass.constant():
+                # Case C: Shared return object referenced by entries
+                cache_mem = ComplexityClass.dominant_of(ret_payload, state_class)
+                mem_note = (
+                    f"Retained byte-memory: {cache_mem.big_o} "
+                    "(Note: cache entry values store references to a shared return object without per-state "
+                    f"reallocation; single shared payload occupies {ret_payload.big_o} heap memory "
+                    f"alongside O(|R|) entry table references, bounding total cache retention to {cache_mem.big_o})."
+                )
+            elif has_shared_arg and arg_payload and arg_payload > ComplexityClass.constant():
+                # Case A: Shared argument object referenced by entries
+                cache_mem = ComplexityClass.dominant_of(arg_payload, state_class)
+                mem_note = (
+                    f"Retained byte-memory: {cache_mem.big_o} "
+                    "(Note: cache entry keys share references to external/passed argument payload without per-state "
+                    f"duplication; single shared payload occupies {arg_payload.big_o} heap memory "
+                    f"alongside O(|R|) entry table references, bounding total cache retention to {cache_mem.big_o})."
+                )
             else:
                 cache_mem = state_class
+                mem_note = (
+                    f"Retained byte-memory: {cache_mem.big_o} "
+                    "(Note: entries store primitive scalar values; retained cache memory matches table entry count O(|R|))."
+                )
+
             rel.cache_retained_class = cache_mem
             rel.auxiliary_space_class = ComplexityClass.dominant_of(rel.active_frames_class, cache_mem)
             rel.total_retained_space_class = cache_mem
+            entry_count_desc = f"Bounded by reachable state count |R| = {state_desc} entries"
 
         rel.is_solved = True
         rel.confidence = "HIGH"
-        entry_count_desc = (
-            f"Bounded by fixed LRU capacity (O(1) entries)"
-            if rel.is_bounded_cache
-            else f"Bounded by reachable state count {state_desc}"
-        )
         local_work_str = "Θ(1)" if rel.local_work.category == "constant" else (rel.local_work.tight_bound if rel.local_work.tight_bound != "Unknown" else rel.local_work.big_o)
         rel.derivation_steps = [
             "Memoization table / cache detected for recursive state transitions.",
             f"State space cardinality is bounded by distinct reachable states: |R| = {state_desc}.",
             f"Local non-recursive work per state: T_local(s) = {local_work_str}.",
             f"Cache entry count: {entry_count_desc}. Each entry retains references to argument keys and computed return values.",
-            f"Retained byte-memory: {rel.cache_retained_class.big_o} (Note: fixed entry count bounds table entries to O(1), while retained byte-memory scales with payload sizes).",
-            "Each reachable state is computed at most once on cache miss; repeated calls or transitions to previously cached states resolve in O(1) cache lookup overhead.",
+            mem_note,
+            (
+                "Each reachable state is computed at most once on cache miss; repeated calls or transitions to previously "
+                "cached states resolve in expected O(1) cache lookup overhead (conditional on standard hash-table "
+                "collision-free assumptions and O(1) primitive scalar key hashing and equality comparison; "
+                "compound or sequence keys of dimension k require O(k) hashing and equality comparison overhead)."
+            ),
             f"Total execution time: T_total = sum_{{s in R}} T_local(s) + T_overhead = {rel.solved_complexity.tight_bound}.",
         ]
         rel.confidence_reasons = [

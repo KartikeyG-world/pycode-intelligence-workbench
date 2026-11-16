@@ -897,7 +897,14 @@ class CostComposer:
                 return (
                     ComplexityClass.unknown(f"unresolved inner list dimensions in sum({param_name}, [])"),
                     False,
-                    f"sum() with container start argument on unannotated parameter '{param_name}' has unestablished inner list dimensions l_j; exact complexity Theta(k + sum_{{i=1}}^k sum_{{j=1}}^i l_j) requires known inner dimensions (verified lower bound Omega(k))",
+                    (
+                        f"sum() with container start argument on unannotated parameter '{param_name}' evaluates "
+                        "repeated list concatenation under the input model assumption of a finite iterable containing "
+                        "compatible built-in Python list objects. The outer iterator dispatches k addition operations, "
+                        "establishing a proven lower bound of Omega(k) and a modeled outer work contribution of O(k). "
+                        "However, total time complexity T(k) = Theta(k + sum_{i=1}^k sum_{j=1}^i l_j) is unproven and "
+                        "statically Unknown because inner sublist lengths l_j are unconstrained."
+                    ),
                 )
 
         if fname in ("min", "max", "sum"):

@@ -86,6 +86,11 @@ class RecursionAnalyzer:
         # 8. Check local allocations per frame and whether they are released before recursive calls
         local_alloc, alloc_released = self._inspect_recursive_local_allocations(func_node, func_name)
 
+        # 9. Check cache payload semantics (shared vs unique argument/return allocations)
+        has_shared_arg, has_unique_arg, has_shared_ret, has_fresh_ret, arg_payload, ret_payload = (
+            self._inspect_cache_payload_semantics(func_node, param_names, func_name)
+        )
+
         # Canonical input size variable
         canonical_var = "n"
         if param_names:
@@ -116,6 +121,12 @@ class RecursionAnalyzer:
             is_bounded_cache=is_bounded_cache,
             local_allocation_work=local_alloc,
             allocation_released_before_recursion=alloc_released,
+            has_shared_argument=has_shared_arg,
+            has_unique_argument_allocation=has_unique_arg,
+            has_shared_return_object=has_shared_ret,
+            has_fresh_return_allocation=has_fresh_ret,
+            argument_payload_class=arg_payload,
+            return_payload_class=ret_payload,
         )
 
         return rel
@@ -208,48 +219,58 @@ class RecursionAnalyzer:
                 input_params = [p for p in param_names if p.lower() not in cache_params]
                 is_bounded = bool("lru" in dec_id.lower() and maxsize_val is not None)
 
+                container_payload_names = {
+                    "path", "acc", "accumulator", "prefix", "suffix", "curr", "current",
+                    "trail", "history", "shared", "arr", "lst", "items", "data", "nums", "seq", "values", "tuple", "list"
+                }
+
                 if len(input_params) >= 2:
                     p1, p2 = input_params[:2]
-                    rec_calls = [
-                        n for n in ast.walk(func_node)
-                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == func_node.name
-                    ]
-                    p1_modified = False
-                    p2_modified = False
-                    all_calls_modify_both = bool(rec_calls)
-                    any_call_modifies_only_one = False
-
-                    for rc in rec_calls:
-                        c_p1_mod = False
-                        c_p2_mod = False
-                        if rc.args and len(rc.args) > 0:
-                            a0 = rc.args[0]
-                            if not (isinstance(a0, ast.Name) and a0.id == p1):
-                                c_p1_mod = True
-                        if rc.args and len(rc.args) > 1:
-                            a1 = rc.args[1]
-                            if not (isinstance(a1, ast.Name) and a1.id == p2):
-                                c_p2_mod = True
-
-                        if c_p1_mod:
-                            p1_modified = True
-                        if c_p2_mod:
-                            p2_modified = True
-
-                        if c_p1_mod and c_p2_mod:
-                            pass
-                        elif c_p1_mod or c_p2_mod:
-                            all_calls_modify_both = False
-                            any_call_modifies_only_one = True
-                        else:
-                            all_calls_modify_both = False
-
-                    if not p2_modified:
+                    if p2.lower() in container_payload_names:
                         state = f"Θ({p1})"
-                    elif all_calls_modify_both and not any_call_modifies_only_one:
-                        state = f"Θ(min({p1},{p2}))"
+                    elif p1.lower() in container_payload_names:
+                        state = f"Θ({p2})"
                     else:
-                        state = f"Θ({p1}*{p2})"
+                        rec_calls = [
+                            n for n in ast.walk(func_node)
+                            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == func_node.name
+                        ]
+                        p1_modified = False
+                        p2_modified = False
+                        all_calls_modify_both = bool(rec_calls)
+                        any_call_modifies_only_one = False
+
+                        for rc in rec_calls:
+                            c_p1_mod = False
+                            c_p2_mod = False
+                            if rc.args and len(rc.args) > 0:
+                                a0 = rc.args[0]
+                                if not (isinstance(a0, ast.Name) and a0.id == p1):
+                                    c_p1_mod = True
+                            if rc.args and len(rc.args) > 1:
+                                a1 = rc.args[1]
+                                if not (isinstance(a1, ast.Name) and a1.id == p2):
+                                    c_p2_mod = True
+
+                            if c_p1_mod:
+                                p1_modified = True
+                            if c_p2_mod:
+                                p2_modified = True
+
+                            if c_p1_mod and c_p2_mod:
+                                pass
+                            elif c_p1_mod or c_p2_mod:
+                                all_calls_modify_both = False
+                                any_call_modifies_only_one = True
+                            else:
+                                all_calls_modify_both = False
+
+                        if not p2_modified:
+                            state = f"Θ({p1})"
+                        elif all_calls_modify_both and not any_call_modifies_only_one:
+                            state = f"Θ(min({p1},{p2}))"
+                        else:
+                            state = f"Θ({p1}*{p2})"
                 else:
                     state = "Θ(n)"
                 return True, state, is_bounded
@@ -490,9 +511,39 @@ class RecursionAnalyzer:
                         cname = child.func.id
                     elif isinstance(child.func, ast.Attribute):
                         cname = child.func.attr
-                    # Conservative escape: passing an allocated object to an external/unresolved call escapes it
-                    if cname not in ("len", "id", "type", "print", func_name):
-                        for a in child.args:
+
+                    all_call_args = list(child.args) + [kw.value for kw in child.keywords if kw.arg != "file"]
+                    if cname == func_name:
+                        # Self-recursive call: passing an allocated object into the callee frame escapes
+                        # the caller's local scope, retaining the object across the child frame's lifetime.
+                        for a in all_call_args:
+                            for sub in ast.walk(a):
+                                if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                    escaped_allocs.update(var_to_allocs[sub.id])
+                    elif cname == "print":
+                        # print() is non-escaping for stdout / stderr, but if a custom file/stream writer
+                        # is passed (e.g. print(temp, file=custom_writer)), references escape into that writer.
+                        has_custom_stream = False
+                        for kw in child.keywords:
+                            if kw.arg == "file":
+                                if isinstance(kw.value, ast.Constant) and kw.value.value is None:
+                                    continue
+                                if isinstance(kw.value, ast.Attribute) and kw.value.attr in ("stdout", "stderr"):
+                                    continue
+                                has_custom_stream = True
+                        if has_custom_stream:
+                            for a in all_call_args:
+                                for sub in ast.walk(a):
+                                    if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                        escaped_allocs.update(var_to_allocs[sub.id])
+                    elif cname in ("len", "id", "type"):
+                        # Whitelisted non-escaping operations under the assumption of unshadowed built-in
+                        # functions operating on built-in collections (list, dict, set). These inspect
+                        # internal metadata (e.g. ob_size, pointer address, ob_type) without retaining references.
+                        pass
+                    else:
+                        # External or unresolved function/method invocation: conservatively treat arguments as escaped.
+                        for a in all_call_args:
                             for sub in ast.walk(a):
                                 if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
                                     escaped_allocs.update(var_to_allocs[sub.id])
@@ -547,4 +598,106 @@ class RecursionAnalyzer:
             return ComplexityClass.linear()
         elif isinstance(node, (ast.DictComp, ast.SetComp)):
             return ComplexityClass.linear()
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("list", "tuple", "dict", "set"):
+            if node.args:
+                return ComplexityClass.linear()
         return None
+
+    def _inspect_cache_payload_semantics(
+        self, func_node: ast.FunctionDef, param_names: List[str], func_name: str
+    ) -> Tuple[bool, bool, bool, bool, Optional[ComplexityClass], Optional[ComplexityClass]]:
+        """Inspects whether a memoized/cached function exhibits:
+        - has_shared_argument: argument payload passed unmodified across recursive calls.
+        - has_unique_argument_allocation: fresh argument payload allocated per recursive call/state.
+        - has_shared_return_object: return value references a pre-existing/shared container payload.
+        - has_fresh_return_allocation: return value allocates a fresh container per call/state.
+        - argument_payload_class: complexity class of argument payload (if any).
+        - return_payload_class: complexity class of return payload (if any).
+        """
+        local_alloc_vars: Set[str] = set()
+        for stmt in func_node.body:
+            if isinstance(stmt, ast.Assign):
+                is_alloc = self._evaluate_allocation_node(stmt.value) is not None
+                if not is_alloc and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, (ast.Add, ast.Mult)):
+                    is_alloc = True
+                if is_alloc:
+                    for t in stmt.targets:
+                        if isinstance(t, ast.Name):
+                            local_alloc_vars.add(t.id)
+            elif isinstance(stmt, ast.AnnAssign) and stmt.value:
+                is_alloc = self._evaluate_allocation_node(stmt.value) is not None
+                if not is_alloc and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, (ast.Add, ast.Mult)):
+                    is_alloc = True
+                if is_alloc and isinstance(stmt.target, ast.Name):
+                    local_alloc_vars.add(stmt.target.id)
+
+        has_unique_argument_allocation = False
+        has_shared_argument = False
+        argument_payload_class: Optional[ComplexityClass] = None
+
+        rec_calls = [
+            n for n in ast.walk(func_node)
+            if isinstance(n, ast.Call) and (
+                (isinstance(n.func, ast.Name) and n.func.id == func_name)
+                or (isinstance(n.func, ast.Attribute) and n.func.attr == func_name)
+            )
+        ]
+
+        container_param_candidates = {
+            p for p in param_names
+            if any(kw in p.lower() for kw in ("shared", "arr", "lst", "items", "data", "nums", "seq", "values", "path", "grid", "matrix", "table", "tuple", "list"))
+        }
+
+        for rc in rec_calls:
+            for a in rc.args:
+                if isinstance(a, ast.BinOp) and isinstance(a.op, (ast.Add, ast.Mult)):
+                    has_unique_argument_allocation = True
+                    argument_payload_class = ComplexityClass.linear("n")
+                elif isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id in ("list", "tuple", "set", "dict"):
+                    if a.args:
+                        has_unique_argument_allocation = True
+                        argument_payload_class = ComplexityClass.linear("n")
+                elif isinstance(a, ast.Name) and a.id in local_alloc_vars:
+                    has_unique_argument_allocation = True
+                    argument_payload_class = ComplexityClass.linear("n")
+
+        if not has_unique_argument_allocation and container_param_candidates:
+            for rc in rec_calls:
+                for a in rc.args:
+                    if isinstance(a, ast.Name) and a.id in container_param_candidates:
+                        has_shared_argument = True
+                        argument_payload_class = ComplexityClass.linear("n")
+                        break
+                if has_shared_argument:
+                    break
+
+        has_fresh_return_allocation = False
+        has_shared_return_object = False
+        return_payload_class: Optional[ComplexityClass] = None
+
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Return) and node.value:
+                val = node.value
+                alloc_cost = self._evaluate_allocation_node(val)
+                if alloc_cost:
+                    has_fresh_return_allocation = True
+                    return_payload_class = alloc_cost
+                elif isinstance(val, ast.Name):
+                    if val.id in local_alloc_vars:
+                        has_fresh_return_allocation = True
+                        return_payload_class = ComplexityClass.linear("n")
+                    elif val.id in container_param_candidates or "shared" in val.id.lower() or any(kw in val.id.lower() for kw in ("result", "data", "table", "arr")):
+                        has_shared_return_object = True
+                        return_payload_class = ComplexityClass.linear("n")
+
+        if has_fresh_return_allocation:
+            has_shared_return_object = False
+
+        return (
+            has_shared_argument,
+            has_unique_argument_allocation,
+            has_shared_return_object,
+            has_fresh_return_allocation,
+            argument_payload_class,
+            return_payload_class,
+        )

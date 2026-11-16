@@ -1,5 +1,6 @@
 import math
-from typing import Dict, Any, Optional, Tuple
+import re
+from typing import Dict, Any, Optional, Tuple, Set, List
 
 
 class ComplexityClass:
@@ -105,6 +106,17 @@ class ComplexityClass:
             return cls("polynomial", poly_degree=3.0, log_degree=1.0, is_tight=tight)
         if inner in ("n⁴", "n^4"):
             return cls("polynomial", poly_degree=4.0, is_tight=tight)
+        if " + " in inner:
+            terms = [cls.from_big_o(f"O({t.strip()})", is_tight=tight) for t in inner.split("+")]
+            all_v = tuple(sorted(set.union(*[set(cls._get_class_vars(t)) for t in terms])))
+            return cls("custom", custom_str=inner, variables=all_v, is_tight=tight)
+        m_poly = re.match(r"^([a-zA-Z])(?:\^(\d+)|([²³⁴⁵]))$", inner)
+        if m_poly:
+            var_name = m_poly.group(1)
+            deg_val = float(m_poly.group(2)) if m_poly.group(2) else {"²": 2.0, "³": 3.0, "⁴": 4.0, "⁵": 5.0}[m_poly.group(3)]
+            return cls("polynomial", poly_degree=deg_val, variables=(var_name,), is_tight=tight)
+        if re.match(r"^[a-zA-Z]$", inner):
+            return cls("linear", poly_degree=1.0, variables=(inner,), is_tight=tight)
         if inner in ("2^n", "2ⁿ"):
             return cls("exponential", exp_base=2.0, is_tight=tight)
         if inner in ("3^n", "3ⁿ"):
@@ -195,6 +207,9 @@ class ComplexityClass:
             return 10.0 * self.poly_degree + 2.0 * self.log_degree
         if self.category == "custom":
             raw = self._raw_expression()
+            if "+" in raw:
+                terms = raw.split("+")
+                return max(ComplexityClass.from_big_o(f"O({t.strip()})").rank_score() for t in terms)
             deg = 1.0
             if "*" in raw:
                 deg = float(len(raw.split("*")))
@@ -228,11 +243,104 @@ class ComplexityClass:
         return self.big_o == other.big_o
 
     @classmethod
+    def _get_class_vars(cls, c: "ComplexityClass") -> Set[str]:
+        if c.category == "constant":
+            return set()
+        if c.category != "custom" and c.variables:
+            return set(c.variables)
+        raw = c._raw_expression()
+        tokens = set(re.findall(r"[a-zA-Z_]\w*", raw)) - {
+            "log", "sqrt", "sin", "cos", "min", "max", "Theta", "O", "Unknown", "Unsupported"
+        }
+        if tokens:
+            return tokens
+        return set(c.variables) if c.variables else {"n"}
+
+    @classmethod
+    def _scale_var_in_expression(cls, c: "ComplexityClass", var: str, add_deg: int) -> "ComplexityClass":
+        raw = c._raw_expression()
+        all_vars = tuple(sorted(set(cls._get_class_vars(c)) | {var}))
+        m = re.search(rf"\b{var}(?:²|³|\^(\d+))?\b", raw)
+        cur_deg = 1
+        if m:
+            matched = m.group(0)
+            if "²" in matched:
+                cur_deg = 2
+            elif "³" in matched:
+                cur_deg = 3
+            elif m.group(1):
+                cur_deg = int(m.group(1))
+            new_deg = cur_deg + add_deg
+            rep = f"{var}²" if new_deg == 2 else (f"{var}³" if new_deg == 3 else f"{var}^{new_deg}")
+            new_raw = raw[:m.start()] + rep + raw[m.end():]
+            return cls("custom", custom_str=new_raw, variables=all_vars)
+        return cls.multi_variable(f"{var}*{raw}")
+
+    @classmethod
     def dominant_of(cls, *classes: "ComplexityClass") -> "ComplexityClass":
         valid = [c for c in classes if c.category not in ("unsupported", "unknown")]
         if not valid:
             return classes[0] if classes else cls.unsupported()
-        return max(valid, key=lambda c: c.rank_score())
+
+        non_constants = [c for c in valid if c.category != "constant"]
+        if not non_constants:
+            return cls.constant()
+        if len(non_constants) == 1:
+            return non_constants[0]
+
+        # Check if all classes share the identical variable set
+        var_sets = [cls._get_class_vars(c) for c in non_constants]
+        first_vs = var_sets[0]
+        if all(vs == first_vs for vs in var_sets):
+            return max(non_constants, key=lambda c: c.rank_score())
+
+        # Multidimensional composition across independent dimensions:
+        # Group non-constant classes by their variable sets
+        groups: Dict[Tuple[str, ...], List["ComplexityClass"]] = {}
+        for c in non_constants:
+            vk = tuple(sorted(cls._get_class_vars(c)))
+            groups.setdefault(vk, []).append(c)
+
+        # For each variable set, select the dominant representative
+        candidates = [max(g, key=lambda c: c.rank_score()) for g in groups.values()]
+
+        # Subsumption check among candidates:
+        # e.g., O(n) is subsumed by O(n*m) when n, m >= 1
+        surviving: List["ComplexityClass"] = []
+        for i, cand in enumerate(candidates):
+            c_vars = cls._get_class_vars(cand)
+            subsumed = False
+            for j, other in enumerate(candidates):
+                if i == j:
+                    continue
+                o_vars = cls._get_class_vars(other)
+                if c_vars and o_vars and c_vars.issubset(o_vars) and c_vars != o_vars:
+                    if other.rank_score() >= cand.rank_score():
+                        subsumed = True
+                        break
+                # Generic unparameterized placeholder 'n' subsumed by higher/equal degree multi-variable term
+                if len(c_vars) == 1 and "n" in c_vars and len(o_vars) >= 2:
+                    if other.rank_score() >= cand.rank_score():
+                        subsumed = True
+                        break
+            if not subsumed:
+                surviving.append(cand)
+
+        if len(surviving) == 1:
+            return surviving[0]
+
+        # Incomparable independent dimensions: preserve the sum of their asymptotic terms
+        def _sort_key(c: "ComplexityClass") -> Tuple[int, str]:
+            cv = sorted(cls._get_class_vars(c))
+            first = cv[0] if cv else ""
+            priority = 0 if "n" in cv else (1 if "m" in cv else 2)
+            return (priority, first)
+
+        sorted_survivors = sorted(surviving, key=_sort_key)
+        expr_terms = [c._raw_expression() for c in sorted_survivors]
+        all_vars = tuple(sorted(set.union(*[cls._get_class_vars(c) for c in sorted_survivors])))
+        combined_expr = " + ".join(expr_terms)
+        return cls("custom", custom_str=combined_expr, variables=all_vars)
 
     @classmethod
     def multiply(cls, c1: "ComplexityClass", c2: "ComplexityClass") -> "ComplexityClass":
@@ -242,6 +350,29 @@ class ComplexityClass:
         if c2.category == "constant":
             return c1
 
+        vars1 = cls._get_class_vars(c1)
+        vars2 = cls._get_class_vars(c2)
+
+        # 1. Distinct independent variables:
+        if vars1 and vars2 and vars1 != vars2:
+            raw1 = c1._raw_expression()
+            raw2 = c2._raw_expression()
+            # If one is a single variable already present in the other:
+            if len(vars2) == 1 and list(vars2)[0] in raw1 and not ("min(" in raw1 or "max(" in raw1):
+                ovar = list(vars2)[0]
+                p_deg = int(c2.poly_degree) if c2.category in ("linear", "polynomial") else 1
+                return cls._scale_var_in_expression(c1, ovar, p_deg)
+            if len(vars1) == 1 and list(vars1)[0] in raw2 and not ("min(" in raw2 or "max(" in raw2):
+                ovar = list(vars1)[0]
+                p_deg = int(c1.poly_degree) if c1.category in ("linear", "polynomial") else 1
+                return cls._scale_var_in_expression(c2, ovar, p_deg)
+            # Truly disjoint variables: e.g. {n} and {m}
+            all_vars = tuple(sorted(vars1 | vars2))
+            if len(vars2) == 1 and len(vars1) > 1:
+                return cls.multi_variable(f"{raw2}*{raw1}")
+            return cls.multi_variable(f"{raw1}*{raw2}")
+
+        # 2. Same variables (e.g. both 'n'):
         # Exponential * Polynomial -> Exponential with poly factor
         if c1.category == "exponential" and c2.category in ("linear", "polynomial"):
             new_poly = c1.poly_degree + c2.poly_degree
@@ -254,53 +385,25 @@ class ComplexityClass:
         if c1.category in ("linear", "polynomial") and c2.category == "linearithmic":
             new_poly = c1.poly_degree + c2.poly_degree
             new_log = c1.log_degree + c2.log_degree
-            return cls("polynomial", poly_degree=new_poly, log_degree=new_log)
+            return cls("polynomial", poly_degree=new_poly, log_degree=new_log, variables=c1.variables)
         if c2.category in ("linear", "polynomial") and c1.category == "linearithmic":
             new_poly = c2.poly_degree + c1.poly_degree
             new_log = c2.log_degree + c1.log_degree
-            return cls("polynomial", poly_degree=new_poly, log_degree=new_log)
+            return cls("polynomial", poly_degree=new_poly, log_degree=new_log, variables=c2.variables)
 
-        # Polynomial * Polynomial
+        # Polynomial * Polynomial with same variable:
         if c1.category in ("linear", "polynomial") and c2.category in ("linear", "polynomial"):
             deg = c1.poly_degree + c2.poly_degree
             log_deg = c1.log_degree + c2.log_degree
+            v = c1.variables[0] if c1.variables else "n"
             if log_deg > 0:
-                return cls("polynomial", poly_degree=deg, log_degree=log_deg)
-            return cls.polynomial(deg)
+                return cls("polynomial", poly_degree=deg, log_degree=log_deg, variables=(v,))
+            return cls.polynomial(deg, var=v)
 
         # Linear * Logarithmic -> Linearithmic
         if (c1.category == "linear" and c2.category == "logarithmic") or (c2.category == "linear" and c1.category == "logarithmic"):
-            return cls.linearithmic()
-
-        # Multi-variable: O(n) * O(m) -> O(n*m)
-        if c1.variables != c2.variables and c1.variables and c2.variables:
-            return cls.multi_variable(f"{c1.variables[0]}*{c2.variables[0]}")
-
-        # Custom / multi-variable * Linear or Polynomial: e.g. O(n*m) * O(n) = O(n²*m)
-        if c1.category == "custom" or c2.category == "custom":
-            cust = c1 if c1.category == "custom" else c2
-            other = c2 if c1.category == "custom" else c1
-            raw = cust._raw_expression()
-            if other.category == "linear":
-                ovar = other.variables[0] if other.variables else "n"
-                if ovar in raw and not ("min(" in raw or "max(" in raw):
-                    import re
-                    new_str = re.sub(rf"\b{ovar}\b", f"{ovar}²", raw, count=1)
-                    return cls.multi_variable(new_str)
-                else:
-                    return cls.multi_variable(f"{ovar}*{raw}")
-            elif other.category == "polynomial":
-                ovar = other.variables[0] if other.variables else "n"
-                deg = int(other.poly_degree)
-                p_str = f"{ovar}²" if deg == 2 else (f"{ovar}³" if deg == 3 else f"{ovar}^{deg}")
-                if ovar in raw and not ("min(" in raw or "max(" in raw):
-                    import re
-                    new_deg = deg + 1
-                    rep_str = f"{ovar}²" if new_deg == 2 else (f"{ovar}³" if new_deg == 3 else f"{ovar}^{new_deg}")
-                    new_str = re.sub(rf"\b{ovar}\b", rep_str, raw, count=1)
-                    return cls.multi_variable(new_str)
-                else:
-                    return cls.multi_variable(f"{p_str}*{raw}")
+            v = c1.variables[0] if c1.category == "linear" else (c2.variables[0] if c2.category == "linear" else "n")
+            return cls.linearithmic(var=v)
 
         # Fallback to dominant or custom
         return cls.dominant_of(c1, c2)

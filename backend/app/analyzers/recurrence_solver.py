@@ -29,6 +29,7 @@ class RecurrenceRelation:
         has_fresh_return_allocation: bool = False,
         argument_payload_class: Optional[ComplexityClass] = None,
         return_payload_class: Optional[ComplexityClass] = None,
+        has_cross_role_alias: bool = False,
     ):
         self.func_name = func_name
         self.branching_factor = branching_factor
@@ -51,6 +52,7 @@ class RecurrenceRelation:
         self.has_fresh_return_allocation = has_fresh_return_allocation
         self.argument_payload_class = argument_payload_class
         self.return_payload_class = return_payload_class
+        self.has_cross_role_alias = has_cross_role_alias
 
         # Output derivation artifacts
         self.is_solved: bool = False
@@ -463,6 +465,7 @@ class RecurrenceSolver:
         has_shared_ret = rel.has_shared_return_object
         has_unique_arg = rel.has_unique_argument_allocation
         has_shared_arg = rel.has_shared_argument
+        has_cross_role_alias = getattr(rel, "has_cross_role_alias", False)
 
         ret_payload = rel.return_payload_class
         arg_payload = rel.argument_payload_class
@@ -480,10 +483,15 @@ class RecurrenceSolver:
                 retained_components.append(arg_payload)
             if has_fresh_ret and ret_payload and ret_payload > ComplexityClass.constant():
                 retained_components.append(ret_payload)
-            if has_shared_arg and arg_payload and arg_payload > ComplexityClass.constant():
-                retained_components.append(arg_payload)
-            if has_shared_ret and ret_payload and ret_payload > ComplexityClass.constant():
-                retained_components.append(ret_payload)
+            if has_cross_role_alias:
+                shared_obj = arg_payload or ret_payload
+                if shared_obj and shared_obj > ComplexityClass.constant():
+                    retained_components.append(shared_obj)
+            else:
+                if has_shared_arg and arg_payload and arg_payload > ComplexityClass.constant():
+                    retained_components.append(arg_payload)
+                if has_shared_ret and ret_payload and ret_payload > ComplexityClass.constant():
+                    retained_components.append(ret_payload)
 
             combined_cache_mem = ComplexityClass.dominant_of(*retained_components)
             rel.cache_retained_class = combined_cache_mem
@@ -495,10 +503,14 @@ class RecurrenceSolver:
                 b_qualifications.append(f"unique freshly allocated argument payload of size {arg_payload.big_o if arg_payload else 'O(1)'}")
             if has_fresh_ret:
                 b_qualifications.append(f"unique freshly allocated return payload of size {ret_payload.big_o if ret_payload else 'O(1)'}")
-            if has_shared_arg:
-                b_qualifications.append(f"share references to external/passed argument payload of size {arg_payload.big_o if arg_payload else 'O(1)'}")
-            if has_shared_ret:
-                b_qualifications.append(f"store references to a shared return object of size {ret_payload.big_o if ret_payload else 'O(1)'}")
+            if has_cross_role_alias:
+                shared_obj = arg_payload or ret_payload
+                b_qualifications.append(f"shared argument and return object reference identical underlying allocation of size {shared_obj.big_o if shared_obj else 'O(1)'} (cross-role alias deduplicated)")
+            else:
+                if has_shared_arg:
+                    b_qualifications.append(f"share references to external/passed argument payload of size {arg_payload.big_o if arg_payload else 'O(1)'}")
+                if has_shared_ret:
+                    b_qualifications.append(f"store references to a shared return object of size {ret_payload.big_o if ret_payload else 'O(1)'}")
             mem_note = (
                 f"Retained byte-memory: {combined_cache_mem.big_o} "
                 f"(Note: {'; '.join(b_qualifications)}; retained byte-memory combines payload sizes retained across cached entries)."
@@ -513,10 +525,15 @@ class RecurrenceSolver:
             if has_fresh_ret and ret_payload and ret_payload > ComplexityClass.constant():
                 m_fresh_ret = ComplexityClass.multiply(state_class, ret_payload)
                 retained_components.append(m_fresh_ret)
-            if has_shared_arg and arg_payload and arg_payload > ComplexityClass.constant():
-                retained_components.append(arg_payload)  # Deduplicated: counted once on heap
-            if has_shared_ret and ret_payload and ret_payload > ComplexityClass.constant():
-                retained_components.append(ret_payload)  # Deduplicated: counted once on heap
+            if has_cross_role_alias:
+                shared_obj = arg_payload or ret_payload
+                if shared_obj and shared_obj > ComplexityClass.constant():
+                    retained_components.append(shared_obj)
+            else:
+                if has_shared_arg and arg_payload and arg_payload > ComplexityClass.constant():
+                    retained_components.append(arg_payload)  # Deduplicated: counted once on heap
+                if has_shared_ret and ret_payload and ret_payload > ComplexityClass.constant():
+                    retained_components.append(ret_payload)  # Deduplicated: counted once on heap
 
             combined_cache_mem = ComplexityClass.dominant_of(*retained_components)
             rel.cache_retained_class = combined_cache_mem
@@ -528,11 +545,15 @@ class RecurrenceSolver:
                 u_qualifications.append(f"unique freshly allocated argument payload of size {arg_payload.big_o if arg_payload else 'O(1)'} per entry accumulating to {m_unique_arg.big_o if 'm_unique_arg' in locals() else 'O(1)'}")
             if has_fresh_ret:
                 u_qualifications.append(f"unique freshly allocated return payload of size {ret_payload.big_o if ret_payload else 'O(1)'} per entry accumulating to {m_fresh_ret.big_o if 'm_fresh_ret' in locals() else 'O(1)'}")
-            if has_shared_arg:
-                u_qualifications.append(f"share references to external/passed argument payload of size {arg_payload.big_o if arg_payload else 'O(1)'} deduplicated across entries")
-            if has_shared_ret:
-                u_qualifications.append(f"store references to a shared return object of size {ret_payload.big_o if ret_payload else 'O(1)'} deduplicated across entries")
-            if not has_unique_arg and not has_fresh_ret and not has_shared_arg and not has_shared_ret:
+            if has_cross_role_alias:
+                shared_obj = arg_payload or ret_payload
+                u_qualifications.append(f"shared argument and return object reference identical underlying allocation of size {shared_obj.big_o if shared_obj else 'O(1)'} (cross-role alias deduplicated)")
+            else:
+                if has_shared_arg:
+                    u_qualifications.append(f"share references to external/passed argument payload of size {arg_payload.big_o if arg_payload else 'O(1)'} deduplicated across entries")
+                if has_shared_ret:
+                    u_qualifications.append(f"store references to a shared return object of size {ret_payload.big_o if ret_payload else 'O(1)'} deduplicated across entries")
+            if not has_unique_arg and not has_fresh_ret and not has_shared_arg and not has_shared_ret and not has_cross_role_alias:
                 u_qualifications.append("scalar argument and return values")
             mem_note = (
                 f"Retained byte-memory: {combined_cache_mem.big_o} "

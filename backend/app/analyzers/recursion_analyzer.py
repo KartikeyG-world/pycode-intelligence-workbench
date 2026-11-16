@@ -98,7 +98,7 @@ class RecursionAnalyzer:
         local_alloc, alloc_released = self._inspect_recursive_local_allocations(func_node, func_name, module_node)
 
         # 9. Check cache payload semantics (shared vs unique argument/return allocations)
-        has_shared_arg, has_unique_arg, has_shared_ret, has_fresh_ret, arg_payload, ret_payload = (
+        has_shared_arg, has_unique_arg, has_shared_ret, has_fresh_ret, has_cross_role_alias, arg_payload, ret_payload = (
             self._inspect_cache_payload_semantics(func_node, param_names, func_name)
         )
 
@@ -138,6 +138,7 @@ class RecursionAnalyzer:
             has_fresh_return_allocation=has_fresh_ret,
             argument_payload_class=arg_payload,
             return_payload_class=ret_payload,
+            has_cross_role_alias=has_cross_role_alias,
         )
 
         return rel
@@ -444,7 +445,9 @@ class RecursionAnalyzer:
         escaped_allocs: Set[int] = set()
         next_alloc_id = 1
 
-        shadowed_builtins, valid_sys = self._collect_shadowed_builtins_and_sys(func_node, module_node)
+        shadowed_builtins, valid_sys, valid_sys_streams, is_redirected, is_uncertain = (
+            self._collect_shadowed_builtins_and_sys(func_node, module_node)
+        )
 
         for stmt in func_node.body:
             # 1. Explicit deletion: del x, y
@@ -530,51 +533,32 @@ class RecursionAnalyzer:
                                 if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
                                     escaped_allocs.update(var_to_allocs[sub.id])
                     elif cname == "print":
-                        if "print" in shadowed_builtins:
-                            # Locally or module-shadowed print function escapes arguments
+                        if "print" in shadowed_builtins or is_uncertain:
+                            # Locally or module-shadowed print function or uncertain built-ins escapes arguments
                             for a in all_call_args:
                                 for sub in ast.walk(a):
                                     if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
                                         escaped_allocs.update(var_to_allocs[sub.id])
                         else:
-                            # Unshadowed print: verify stream destination and argument representation safety
-                            has_custom_stream = False
-                            for kw in child.keywords:
-                                if kw.arg == "file":
-                                    if isinstance(kw.value, ast.Constant) and kw.value.value is None:
-                                        continue
-                                    if (
-                                        isinstance(kw.value, ast.Attribute)
-                                        and kw.value.attr in ("stdout", "stderr")
-                                        and isinstance(kw.value.value, ast.Name)
-                                        and kw.value.value.id in valid_sys
-                                    ):
-                                        continue
-                                    has_custom_stream = True
-
-                            if has_custom_stream:
-                                # Custom stream writer: the serialized string representation of size O(n)
-                                # is passed to custom_writer.write(s) and retained in the stream buffer
-                                for a in all_call_args:
-                                    for sub in ast.walk(a):
-                                        if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
-                                            escaped_allocs.update(var_to_allocs[sub.id])
-                            else:
-                                # Safe stdout / stderr: verify argument representation does not invoke user side effects
-                                for a in all_call_args:
-                                    for sub in ast.walk(a):
-                                        if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
-                                            aids = var_to_allocs[sub.id]
-                                            # Non-escaping ONLY if exact supported built-in with primitive scalar elements
-                                            if any(
-                                                not alloc_metadata[aid].is_exact_builtin
-                                                or not alloc_metadata[aid].has_primitive_elements
-                                                for aid in aids if aid in alloc_metadata
-                                            ):
-                                                escaped_allocs.update(aids)
+                            # Unshadowed built-in print:
+                            # In Python, print(*args, file=stream) serializes objects to strings via str() / repr()
+                            # and passes the resulting string to stream.write(s). The original container object itself
+                            # is NOT passed to the stream writer and does not escape to the stream buffer.
+                            # The original object ONLY escapes if evaluating __str__ / __repr__ executes arbitrary
+                            # user code (i.e. not an exact built-in collection or contains non-primitive scalar elements).
+                            for a in all_call_args:
+                                for sub in ast.walk(a):
+                                    if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
+                                        aids = var_to_allocs[sub.id]
+                                        if any(
+                                            not alloc_metadata[aid].is_exact_builtin
+                                            or not alloc_metadata[aid].has_primitive_elements
+                                            for aid in aids if aid in alloc_metadata
+                                        ):
+                                            escaped_allocs.update(aids)
                     elif cname in ("len", "id", "type"):
-                        if cname in shadowed_builtins:
-                            # Locally or module-shadowed callable escapes arguments
+                        if cname in shadowed_builtins or is_uncertain:
+                            # Locally or module-shadowed callable or uncertain built-ins escapes arguments
                             for a in all_call_args:
                                 for sub in ast.walk(a):
                                     if isinstance(sub, ast.Name) and sub.id in var_to_allocs:
@@ -636,12 +620,97 @@ class RecursionAnalyzer:
 
         return max_alloc, all_released
 
+    def _walk_local_scope(self, node: ast.AST):
+        """Walks AST nodes in the current local scope without descending into nested function or class bodies.
+        Comprehension generator targets are not yielded as local scope targets, but PEP 572 walrus
+        expressions (NamedExpr) inside comprehensions are yielded as they bind in the enclosing scope.
+        """
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield node
+            return
+
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            yield node
+            for gen in node.generators:
+                yield from self._walk_local_scope(gen.iter)
+                for if_clause in gen.ifs:
+                    yield from self._walk_local_scope(if_clause)
+            if isinstance(node, ast.DictComp):
+                yield from self._walk_local_scope(node.key)
+                yield from self._walk_local_scope(node.value)
+            else:
+                yield from self._walk_local_scope(node.elt)
+            return
+
+        yield node
+        for child in ast.iter_child_nodes(node):
+            yield from self._walk_local_scope(child)
+
+    def _extract_all_target_names(self, node: Optional[ast.AST]) -> List[str]:
+        names: List[str] = []
+        if node is None:
+            return names
+        if isinstance(node, ast.Name):
+            names.append(node.id)
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            for elt in node.elts:
+                names.extend(self._extract_all_target_names(elt))
+        elif isinstance(node, ast.Starred):
+            names.extend(self._extract_all_target_names(node.value))
+        return names
+
+    def _extract_pattern_targets(self, pattern: Optional[ast.AST]) -> List[str]:
+        names: List[str] = []
+        if pattern is None:
+            return names
+        pname = getattr(pattern, "name", None)
+        if pname and isinstance(pname, str):
+            names.append(pname)
+        prest = getattr(pattern, "rest", None)
+        if prest and isinstance(prest, str):
+            names.append(prest)
+        for child in ast.iter_child_nodes(pattern):
+            names.extend(self._extract_pattern_targets(child))
+        return names
+
+    def _extract_targets_from_node(self, node: ast.AST) -> List[str]:
+        targets: List[str] = []
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                targets.extend(self._extract_all_target_names(t))
+        elif isinstance(node, ast.AnnAssign):
+            targets.extend(self._extract_all_target_names(node.target))
+        elif isinstance(node, ast.AugAssign):
+            targets.extend(self._extract_all_target_names(node.target))
+        elif isinstance(node, ast.For):
+            targets.extend(self._extract_all_target_names(node.target))
+        elif isinstance(node, ast.NamedExpr):
+            targets.extend(self._extract_all_target_names(node.target))
+        elif isinstance(node, ast.With):
+            for item in node.items:
+                if item.optional_vars:
+                    targets.extend(self._extract_all_target_names(item.optional_vars))
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                targets.append(node.name)
+        elif hasattr(ast, "Match") and isinstance(node, ast.Match):
+            for case in node.cases:
+                targets.extend(self._extract_pattern_targets(case.pattern))
+        return targets
+
     def _collect_shadowed_builtins_and_sys(
         self, func_node: ast.FunctionDef, module_node: Optional[ast.AST] = None
-    ) -> Tuple[Set[str], Set[str]]:
-        """Collects shadowed built-in names (len, id, type, print) and discovers valid sys module bindings."""
+    ) -> Tuple[Set[str], Set[str], Set[str], bool, bool]:
+        """Collects shadowed built-in names (len, id, type, print), valid sys module aliases,
+        valid directly imported stream bindings, stream redirection status, and environment uncertainty.
+        """
         shadowed: Set[str] = set()
         valid_sys: Set[str] = {"sys"}
+        valid_sys_streams: Set[str] = set()
+        is_redirected: bool = False
+        is_uncertain: bool = False
+
+        builtins_tracked = ("len", "id", "type", "print")
 
         # 1. Inspect module-level imports and assignments if module AST is available
         if module_node and isinstance(module_node, ast.Module):
@@ -652,31 +721,81 @@ class RecursionAnalyzer:
                             if alias.asname:
                                 valid_sys.add(alias.asname)
                                 valid_sys.discard("sys")
+                            else:
+                                valid_sys.add("sys")
                         elif alias.asname == "sys":
-                            # import other as sys -> sys is NOT the standard library sys
                             valid_sys.discard("sys")
-                        if alias.asname in ("len", "id", "type", "print"):
+                        if alias.asname in builtins_tracked:
                             shadowed.add(alias.asname)
-                        elif alias.name in ("len", "id", "type", "print") and not alias.asname:
+                        elif alias.name in builtins_tracked and not alias.asname:
                             shadowed.add(alias.name)
                 elif isinstance(stmt, ast.ImportFrom):
+                    if any(alias.name == "*" for alias in stmt.names):
+                        is_uncertain = True
+                    if stmt.module == "sys":
+                        for alias in stmt.names:
+                            bound = alias.asname or alias.name
+                            if alias.name in ("stdout", "stderr"):
+                                valid_sys_streams.add(bound)
                     for alias in stmt.names:
                         name_bound = alias.asname or alias.name
-                        if name_bound in ("len", "id", "type", "print"):
+                        if name_bound in builtins_tracked:
                             shadowed.add(name_bound)
                         if name_bound in valid_sys:
                             valid_sys.discard(name_bound)
+                        if name_bound in valid_sys_streams and (stmt.module != "sys" or alias.name not in ("stdout", "stderr")):
+                            valid_sys_streams.discard(name_bound)
                 elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                    for t in targets:
+                        if (
+                            isinstance(t, ast.Attribute)
+                            and t.attr in ("stdout", "stderr")
+                            and isinstance(t.value, ast.Name)
+                            and t.value.id in valid_sys
+                        ):
+                            is_redirected = True
+                            valid_sys_streams.discard(t.attr)
                     for target in self._extract_targets_from_node(stmt):
-                        if target in ("len", "id", "type", "print"):
+                        if target in builtins_tracked:
                             shadowed.add(target)
                         if target in valid_sys:
                             valid_sys.discard(target)
+                        if target in valid_sys_streams:
+                            valid_sys_streams.discard(target)
                 elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    if stmt.name in ("len", "id", "type", "print"):
+                    if stmt.name in builtins_tracked:
                         shadowed.add(stmt.name)
                     if stmt.name in valid_sys:
                         valid_sys.discard(stmt.name)
+                    if stmt.name in valid_sys_streams:
+                        valid_sys_streams.discard(stmt.name)
+                elif isinstance(stmt, ast.With):
+                    for item in stmt.items:
+                        if isinstance(item.context_expr, ast.Call):
+                            call = item.context_expr
+                            if (isinstance(call.func, ast.Name) and call.func.id in ("redirect_stdout", "redirect_stderr")) or (
+                                isinstance(call.func, ast.Attribute) and call.func.attr in ("redirect_stdout", "redirect_stderr")
+                            ):
+                                is_redirected = True
+                elif isinstance(stmt, ast.Delete):
+                    for t in stmt.targets:
+                        for name in self._extract_all_target_names(t):
+                            valid_sys.discard(name)
+                            valid_sys_streams.discard(name)
+
+                # Dynamic mutations: setattr(sys, "stdout", ...) or globals()/locals() calls
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Call):
+                        if isinstance(node.func, ast.Name):
+                            if node.func.id in ("globals", "locals"):
+                                is_uncertain = True
+                            elif node.func.id == "setattr" and len(node.args) >= 2:
+                                first, second = node.args[0], node.args[1]
+                                if isinstance(first, ast.Name) and first.id in valid_sys:
+                                    if isinstance(second, ast.Constant) and second.value in ("stdout", "stderr"):
+                                        is_redirected = True
+                                        valid_sys_streams.discard(str(second.value))
 
         # 2. Inspect function parameters
         for arg in (
@@ -687,50 +806,104 @@ class RecursionAnalyzer:
             + ([func_node.args.kwarg] if func_node.args.kwarg else [])
         ):
             if arg and arg.arg:
-                if arg.arg in ("len", "id", "type", "print"):
+                if arg.arg in builtins_tracked:
                     shadowed.add(arg.arg)
                 if arg.arg in valid_sys:
                     valid_sys.discard(arg.arg)
+                if arg.arg in valid_sys_streams:
+                    valid_sys_streams.discard(arg.arg)
 
-        # 3. Inspect local statements inside function body
+        # 3. Inspect local statements inside function body adhering strictly to lexical scoping
         for stmt in func_node.body:
-            for child in ast.walk(stmt):
-                if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.For, ast.NamedExpr)):
-                    for target in self._extract_targets_from_node(child):
-                        if target in ("len", "id", "type", "print"):
-                            shadowed.add(target)
-                        if target in valid_sys:
-                            valid_sys.discard(target)
-                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    if child.name in ("len", "id", "type", "print"):
-                        shadowed.add(child.name)
-                    if child.name in valid_sys:
-                        valid_sys.discard(child.name)
-                elif isinstance(child, (ast.Import, ast.ImportFrom)):
+            for child in self._walk_local_scope(stmt):
+                if isinstance(child, ast.Import):
+                    for alias in child.names:
+                        if alias.name == "sys":
+                            if alias.asname:
+                                valid_sys.add(alias.asname)
+                                valid_sys.discard("sys")
+                            else:
+                                valid_sys.add("sys")
+                        elif alias.asname == "sys":
+                            valid_sys.discard("sys")
+                        if alias.asname in builtins_tracked:
+                            shadowed.add(alias.asname)
+                        elif alias.name in builtins_tracked and not alias.asname:
+                            shadowed.add(alias.name)
+                elif isinstance(child, ast.ImportFrom):
+                    if any(alias.name == "*" for alias in child.names):
+                        is_uncertain = True
+                    if child.module == "sys":
+                        for alias in child.names:
+                            bound = alias.asname or alias.name
+                            if alias.name in ("stdout", "stderr"):
+                                valid_sys_streams.add(bound)
                     for alias in child.names:
                         name_bound = alias.asname or alias.name
-                        if name_bound in ("len", "id", "type", "print"):
+                        if name_bound in builtins_tracked:
                             shadowed.add(name_bound)
                         if name_bound in valid_sys:
                             valid_sys.discard(name_bound)
+                        if name_bound in valid_sys_streams and (child.module != "sys" or alias.name not in ("stdout", "stderr")):
+                            valid_sys_streams.discard(name_bound)
+                elif isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.For, ast.NamedExpr, ast.With, ast.ExceptHandler)) or (
+                    hasattr(ast, "Match") and isinstance(child, ast.Match)
+                ):
+                    if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                        targets = child.targets if isinstance(child, ast.Assign) else [child.target]
+                        for t in targets:
+                            if (
+                                isinstance(t, ast.Attribute)
+                                and t.attr in ("stdout", "stderr")
+                                and isinstance(t.value, ast.Name)
+                                and t.value.id in valid_sys
+                            ):
+                                is_redirected = True
+                                valid_sys_streams.discard(t.attr)
+                    for target in self._extract_targets_from_node(child):
+                        if target in builtins_tracked:
+                            shadowed.add(target)
+                        if target in valid_sys:
+                            valid_sys.discard(target)
+                        if target in valid_sys_streams:
+                            valid_sys_streams.discard(target)
+                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if child.name in builtins_tracked:
+                        shadowed.add(child.name)
+                    if child.name in valid_sys:
+                        valid_sys.discard(child.name)
+                    if child.name in valid_sys_streams:
+                        valid_sys_streams.discard(child.name)
+                elif isinstance(child, ast.With):
+                    for item in child.items:
+                        if isinstance(item.context_expr, ast.Call):
+                            call = item.context_expr
+                            if (isinstance(call.func, ast.Name) and call.func.id in ("redirect_stdout", "redirect_stderr")) or (
+                                isinstance(call.func, ast.Attribute) and call.func.attr in ("redirect_stdout", "redirect_stderr")
+                            ):
+                                is_redirected = True
+                elif isinstance(child, ast.Delete):
+                    for t in child.targets:
+                        for name in self._extract_all_target_names(t):
+                            valid_sys.discard(name)
+                            valid_sys_streams.discard(name)
 
-        return shadowed, valid_sys
+                # Dynamic mutations: setattr or globals()/locals() calls inside function
+                if isinstance(child, ast.Call):
+                    if isinstance(child.func, ast.Name):
+                        if child.func.id in ("globals", "locals"):
+                            is_uncertain = True
+                        elif child.func.id == "setattr" and len(child.args) >= 2:
+                            first, second = child.args[0], child.args[1]
+                            if isinstance(first, ast.Name) and first.id in valid_sys:
+                                if isinstance(second, ast.Constant) and second.value in ("stdout", "stderr"):
+                                    is_redirected = True
+                                    valid_sys_streams.discard(str(second.value))
 
-    def _extract_targets_from_node(self, node: ast.AST) -> List[str]:
-        targets: List[str] = []
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                if isinstance(t, ast.Name):
-                    targets.append(t.id)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            targets.append(node.target.id)
-        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
-            targets.append(node.target.id)
-        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            targets.append(node.target.id)
-        elif isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
-            targets.append(node.target.id)
-        return targets
+        if is_uncertain:
+            shadowed.update(builtins_tracked)
+
+        return shadowed, valid_sys, valid_sys_streams, is_redirected, is_uncertain
 
     def _evaluate_allocation_node(
         self, node: Optional[ast.AST], func_name: Optional[str] = None
@@ -770,12 +943,13 @@ class RecursionAnalyzer:
 
     def _inspect_cache_payload_semantics(
         self, func_node: ast.FunctionDef, param_names: List[str], func_name: str
-    ) -> Tuple[bool, bool, bool, bool, Optional[ComplexityClass], Optional[ComplexityClass]]:
+    ) -> Tuple[bool, bool, bool, bool, bool, Optional[ComplexityClass], Optional[ComplexityClass]]:
         """Inspects whether a memoized/cached function exhibits:
         - has_shared_argument: argument payload passed unmodified across recursive calls.
         - has_unique_argument_allocation: fresh argument payload allocated per recursive call/state.
         - has_shared_return_object: return value references a pre-existing/shared container payload.
         - has_fresh_return_allocation: return value allocates a fresh container per call/state.
+        - has_cross_role_alias: argument and return payload reference the exact same underlying shared allocation.
         - argument_payload_class: complexity class of argument payload (if any).
         - return_payload_class: complexity class of return payload (if any).
         """
@@ -801,6 +975,8 @@ class RecursionAnalyzer:
         has_unique_argument_allocation = False
         has_shared_argument = False
         argument_payload_class: Optional[ComplexityClass] = None
+        shared_arg_names: Set[str] = set()
+        shared_ret_names: Set[str] = set()
 
         rec_calls = [
             n for n in ast.walk(func_node)
@@ -838,6 +1014,7 @@ class RecursionAnalyzer:
                 for a in rc.args:
                     if isinstance(a, ast.Name) and a.id in container_param_candidates:
                         has_shared_argument = True
+                        shared_arg_names.add(a.id)
                         argument_payload_class = ComplexityClass.linear("n")
                         break
                 if has_shared_argument:
@@ -861,13 +1038,19 @@ class RecursionAnalyzer:
                         return_payload_class = ComplexityClass.dominant_of(return_payload_class or ComplexityClass.constant(), cost)
                     elif val.id in container_param_candidates or "shared" in val.id.lower() or any(kw in val.id.lower() for kw in ("result", "data", "table", "arr")):
                         has_shared_return_object = True
+                        shared_ret_names.add(val.id)
                         return_payload_class = ComplexityClass.dominant_of(return_payload_class or ComplexityClass.constant(), ComplexityClass.linear("n"))
+
+        has_cross_role_alias = bool(
+            has_shared_argument and has_shared_return_object and (shared_arg_names & shared_ret_names)
+        )
 
         return (
             has_shared_argument,
             has_unique_argument_allocation,
             has_shared_return_object,
             has_fresh_return_allocation,
+            has_cross_role_alias,
             argument_payload_class,
             return_payload_class,
         )

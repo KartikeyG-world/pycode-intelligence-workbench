@@ -3,6 +3,7 @@ import pytest
 from app.analyzers.complexity_analyzer import ComplexityAnalyzer
 from app.analyzers.ast_parser import SafeASTParser
 from app.schemas.analysis import AnalyzeResponse
+from app.analyzers.complexity_classes import ComplexityClass
 
 
 @pytest.fixture
@@ -1129,8 +1130,9 @@ def process(n, temp=None):
 
 
 def test_63_print_custom_stream_escapes_allocation(analyzer: ComplexityAnalyzer):
-    """Test 63: print(temp, file=custom_writer) escapes the allocated object to an external stream writer;
-    del temp does not ensure release, retaining O(n^2) peak live heap across n frames.
+    """Test 63: print(temp, file=custom_writer) passes string representation via write(str), NOT the
+    underlying allocated container; exact built-in list with primitive elements does not escape to the
+    custom stream writer, and del temp ensures release before recursion, maintaining O(n) peak live heap.
     """
     code = """
 def process(n):
@@ -1144,8 +1146,8 @@ def process(n):
     tree = ast.parse(code)
     res = analyzer.analyze(tree)
 
-    assert res.space_breakdown.peak_live_heap == "O(n²)"
-    assert res.space_complexity == "O(n²)"
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
 
 
 def test_64_print_standard_builtin_is_non_escaping(analyzer: ComplexityAnalyzer):
@@ -1465,7 +1467,8 @@ def process(n):
 
 
 def test_79_print_custom_stdout_stream_escapes_allocation(analyzer: ComplexityAnalyzer):
-    """Test 79: print() with custom.stdout stream (not sys.stdout) escapes allocation into buffer."""
+    """Test 79: print() with custom.stdout stream (not sys.stdout) passes string representation via write(str),
+    not the original container object; exact built-in list is released by del temp before recursion, maintaining O(n) space."""
     code = """
 class CustomStream:
     stdout = None
@@ -1481,11 +1484,12 @@ def process(n):
     tree = ast.parse(code)
     res = analyzer.analyze(tree)
     assert res.time_complexity == "O(n)"
-    assert res.space_complexity == "O(n²)"
+    assert res.space_complexity == "O(n)"
 
 
 def test_80_print_shadowed_sys_parameter_escapes_allocation(analyzer: ComplexityAnalyzer):
-    """Test 80: print() with shadowed sys parameter escapes allocation."""
+    """Test 80: print() with shadowed sys parameter passes string representation via write(str);
+    exact built-in list is released by del temp before recursion, maintaining O(n) space."""
     code = """
 def process(n, sys):
     if n <= 0:
@@ -1498,7 +1502,7 @@ def process(n, sys):
     tree = ast.parse(code)
     res = analyzer.analyze(tree)
     assert res.time_complexity == "O(n)"
-    assert res.space_complexity == "O(n²)"
+    assert res.space_complexity == "O(n)"
 
 
 def test_81_print_imported_sys_alias_preserves_single_frame_deallocation(analyzer: ComplexityAnalyzer):
@@ -1619,3 +1623,213 @@ def solve(n, path):
     assert res.time_complexity == "O(n)"
     assert res.space_breakdown.cache_retained == "O(n)"
     assert res.space_complexity == "O(n)"
+
+
+def test_87_multidimensional_dominant_of_independent_dimensions():
+    """Test 87: ComplexityClass.dominant_of with independent dimensions M1=O(n^2), M2=O(m^3)
+    preserves both asymptotic terms without collapsing incomparable dimensions: O(n² + m³).
+    """
+    m1 = ComplexityClass.polynomial(2.0, "n")
+    m2 = ComplexityClass.polynomial(3.0, "m")
+    dom = ComplexityClass.dominant_of(m1, m2)
+    assert dom.big_o in ("O(n² + m³)", "O(n^2 + m^3)", "O(m³ + n²)")
+
+
+def test_88_multidimensional_multiply_independent_dimensions():
+    """Test 88: ComplexityClass.multiply with independent dimensions O(n^2) * O(m) preserves multi-variable product."""
+    c1 = ComplexityClass.polynomial(2.0, "n")
+    c2 = ComplexityClass.linear("m")
+    prod = ComplexityClass.multiply(c1, c2)
+    assert prod.big_o in ("O(n²*m)", "O(n^2*m)", "O(n² * m)")
+
+    c3 = ComplexityClass.polynomial(3.0, "m")
+    prod3 = ComplexityClass.multiply(c1, c3)
+    assert prod3.big_o in ("O(n²*m³)", "O(n^2*m^3)", "O(n² * m³)")
+
+
+def test_89_cross_role_cache_alias_identity(analyzer: ComplexityAnalyzer):
+    """Test 89: Cross-role cache allocation identity - solve(n, shared) returning shared points to
+    the exact same underlying heap container across argument and return roles, deduplicated to single O(n) object memory.
+    """
+    code = """
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def solve(n, shared):
+    if n <= 0:
+        return shared
+    return solve(n - 1, shared)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.cache_retained == "O(n)"
+
+
+def test_90_comprehension_scope_isolation_does_not_shadow_outer(analyzer: ComplexityAnalyzer):
+    """Test 90: In Python 3, comprehension generator target [len for len in items] is local to comprehension
+    and does NOT shadow len in containing function scope; len(temp) is unshadowed built-in and temp is released before recursion.
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    x = [len for len in [1, 2, 3]]
+    k = len(temp)
+    del temp
+    del x
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_91_comprehension_walrus_expression_leaks_and_shadows(analyzer: ComplexityAnalyzer):
+    """Test 91: PEP 572 assignment expression (len := ...) inside comprehension leaks to enclosing function scope,
+    shadowing len and causing temp to escape into the custom callable, accumulating O(n^2) peak heap.
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    x = [(len := lambda o: 0) for _ in range(1)]
+    k = len(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_92_nested_function_scope_isolation_does_not_shadow_outer(analyzer: ComplexityAnalyzer):
+    """Test 92: Identifiers inside nested function def helper(): len = 1 do not leak to outer function;
+    outer len(temp) calls built-in len, so temp is released before recursion.
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    def helper():
+        len = 1
+        return len
+    k = len(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_93_wildcard_import_uncertainty_forces_conservative_escape(analyzer: ComplexityAnalyzer):
+    """Test 93: Wildcard import from math import * introduces dynamic namespace uncertainty where built-ins
+    may be shadowed; calls to len(temp) conservatively treat arguments as escaped, accumulating O(n^2) peak heap.
+    """
+    code = """
+from math import *
+
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    k = len(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"
+
+
+def test_94_standard_stream_mutation_detected(analyzer: ComplexityAnalyzer):
+    """Test 94: Standard stream mutation sys.stdout = custom_stream marks stream redirected;
+    exact built-in list printed is serialized to string without escaping underlying container, so del temp releases it.
+    """
+    code = """
+import sys
+sys.stdout = custom_stream
+
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    print(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_95_redirect_stdout_context_manager(analyzer: ComplexityAnalyzer):
+    """Test 95: with redirect_stdout(buf): context manager redirects stdout;
+    exact built-in list printed is serialized to string without escaping underlying container.
+    """
+    code = """
+from contextlib import redirect_stdout
+import io
+
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_96_from_sys_import_stdout_recognized(analyzer: ComplexityAnalyzer):
+    """Test 96: from sys import stdout binds standard stream name; print(temp, file=stdout)
+    recognized as standard stream, maintaining O(n) heap after del temp.
+    """
+    code = """
+from sys import stdout
+
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [0] * n
+    print(temp, file=stdout)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n)"
+    assert res.space_complexity == "O(n)"
+
+
+def test_97_print_custom_object_escapes_via_repr(analyzer: ComplexityAnalyzer):
+    """Test 97: print(temp) where temp contains custom objects whose __repr__ may invoke user code
+    and create references escapes the allocated container, accumulating O(n^2) peak live heap across frames.
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temp = [CustomNode() for _ in range(n)]
+    print(temp)
+    del temp
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_complexity == "O(n²)"

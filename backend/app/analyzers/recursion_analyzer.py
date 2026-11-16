@@ -207,7 +207,51 @@ class RecursionAnalyzer:
                 cache_params = {"memo", "cache", "dp", "visited", "seen", "table", "store"}
                 input_params = [p for p in param_names if p.lower() not in cache_params]
                 is_bounded = bool("lru" in dec_id.lower() and maxsize_val is not None)
-                state = f"Θ({'*'.join(input_params[:2])})" if len(input_params) >= 2 else "Θ(n)"
+
+                if len(input_params) >= 2:
+                    p1, p2 = input_params[:2]
+                    rec_calls = [
+                        n for n in ast.walk(func_node)
+                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == func_node.name
+                    ]
+                    p1_modified = False
+                    p2_modified = False
+                    all_calls_modify_both = bool(rec_calls)
+                    any_call_modifies_only_one = False
+
+                    for rc in rec_calls:
+                        c_p1_mod = False
+                        c_p2_mod = False
+                        if rc.args and len(rc.args) > 0:
+                            a0 = rc.args[0]
+                            if not (isinstance(a0, ast.Name) and a0.id == p1):
+                                c_p1_mod = True
+                        if rc.args and len(rc.args) > 1:
+                            a1 = rc.args[1]
+                            if not (isinstance(a1, ast.Name) and a1.id == p2):
+                                c_p2_mod = True
+
+                        if c_p1_mod:
+                            p1_modified = True
+                        if c_p2_mod:
+                            p2_modified = True
+
+                        if c_p1_mod and c_p2_mod:
+                            pass
+                        elif c_p1_mod or c_p2_mod:
+                            all_calls_modify_both = False
+                            any_call_modifies_only_one = True
+                        else:
+                            all_calls_modify_both = False
+
+                    if not p2_modified:
+                        state = f"Θ({p1})"
+                    elif all_calls_modify_both and not any_call_modifies_only_one:
+                        state = f"Θ(min({p1},{p2}))"
+                    else:
+                        state = f"Θ({p1}*{p2})"
+                else:
+                    state = "Θ(n)"
                 return True, state, is_bounded
 
         # Check in-body cache access: memo[key], cache[key]
@@ -358,10 +402,12 @@ class RecursionAnalyzer:
         self, func_node: ast.FunctionDef, func_name: str
     ) -> Tuple[Optional[ComplexityClass], bool]:
         """Detects whether this recursive function allocates heap structures per frame,
-        and whether those allocations are deleted/released before recursive call(s).
+        and whether those allocations are deleted/released before recursive call(s) without surviving aliases or escaping.
         """
         allocated_vars: Dict[str, ComplexityClass] = {}
         deleted_vars_before_call: Set[str] = set()
+        aliased_vars: Dict[str, Set[str]] = {}
+        escaped_vars: Set[str] = set()
 
         for stmt in func_node.body:
             # Check for explicit deletions: del x
@@ -371,30 +417,69 @@ class RecursionAnalyzer:
                         deleted_vars_before_call.add(target.id)
 
             # Check for assignments that allocate memory
-            if isinstance(stmt, ast.Assign):
+            elif isinstance(stmt, ast.Assign):
                 alloc_cost = self._evaluate_allocation_node(stmt.value)
                 if alloc_cost:
                     for t in stmt.targets:
                         if isinstance(t, ast.Name):
                             allocated_vars[t.id] = alloc_cost
+                elif isinstance(stmt.value, ast.Name):
+                    # Alias assignment: alias = source_var
+                    src = stmt.value.id
+                    for t in stmt.targets:
+                        if isinstance(t, ast.Name):
+                            aliased_vars.setdefault(src, set()).add(t.id)
             elif isinstance(stmt, ast.AnnAssign) and stmt.value:
                 alloc_cost = self._evaluate_allocation_node(stmt.value)
                 if alloc_cost and isinstance(stmt.target, ast.Name):
                     allocated_vars[stmt.target.id] = alloc_cost
+                elif isinstance(stmt.value, ast.Name) and isinstance(stmt.target, ast.Name):
+                    aliased_vars.setdefault(stmt.value.id, set()).add(stmt.target.id)
 
-            # Check if this statement contains a recursive call
+            # Check escaping to globals, outer scopes, containers, or return/yield
+            if isinstance(stmt, (ast.Global, ast.Nonlocal)):
+                for name in stmt.names:
+                    escaped_vars.add(name)
+            elif isinstance(stmt, ast.Return) and stmt.value:
+                for child in ast.walk(stmt.value):
+                    if isinstance(child, ast.Name):
+                        escaped_vars.add(child.id)
+            elif isinstance(stmt, (ast.Yield, ast.YieldFrom)):
+                val = stmt.value
+                if val:
+                    for child in ast.walk(val):
+                        if isinstance(child, ast.Name):
+                            escaped_vars.add(child.id)
+
+            # Check container appends / insertions: container.append(x)
             for child in ast.walk(stmt):
-                if isinstance(child, ast.Call):
-                    if isinstance(child.func, ast.Name) and child.func.id == func_name:
-                        # Found recursive call
-                        pass
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
+                    if child.func.attr in ("append", "extend", "insert", "add", "update"):
+                        for a in child.args:
+                            if isinstance(a, ast.Name):
+                                escaped_vars.add(a.id)
 
         if not allocated_vars:
             return None, False
 
         max_alloc = max(allocated_vars.values(), key=lambda c: c.rank_score())
-        released = all(v in deleted_vars_before_call for v in allocated_vars)
-        return max_alloc, released
+
+        # Verify reachability: an object is released only if the variable is deleted,
+        # has not escaped into a container/closure/global, and all its aliases are also deleted.
+        all_released = True
+        for v in allocated_vars:
+            if v not in deleted_vars_before_call:
+                all_released = False
+                break
+            if v in escaped_vars:
+                all_released = False
+                break
+            surviving_aliases = [a for a in aliased_vars.get(v, set()) if a not in deleted_vars_before_call]
+            if surviving_aliases:
+                all_released = False
+                break
+
+        return max_alloc, all_released
 
     def _evaluate_allocation_node(self, node: Optional[ast.AST]) -> Optional[ComplexityClass]:
         if node is None:

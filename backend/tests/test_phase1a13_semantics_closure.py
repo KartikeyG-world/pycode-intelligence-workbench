@@ -660,3 +660,203 @@ def x(y):
     assert res1.time_complexity == res2.time_complexity == "O(n)"
     assert res1.space_complexity == res2.space_complexity == "O(1)"
     assert res1.analysis_status == res2.analysis_status == "COMPLETE"
+
+
+# ==============================================================================
+# 8. MATHEMATICAL AUDIT & REFINED SEMANTICS TESTS (Tests 40 - 49)
+# ==============================================================================
+
+
+def test_40_sum_parameterized_inner_lists_cubic_time(analyzer: ComplexityAnalyzer):
+    """Test 40: sum() on 2D collection with parameterized inner lists (k=n, m=n)
+    repeatedly concatenates lists in Theta(m * k^2) = O(n^3) time.
+    """
+    code = """
+def flatten_matrix(n):
+    return sum([[0] * n for _ in range(n)], [])
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n³)"
+    assert res.analysis_complete
+
+
+def test_41_sum_fixed_size_inner_lists_quadratic_time(analyzer: ComplexityAnalyzer):
+    """Test 41: sum() on collection with fixed-size inner lists (m = O(1))
+    concatenates lists in Theta(m * k^2) = O(k^2) = O(n^2) time.
+    """
+    code = """
+def flatten_pairs(n):
+    return sum([[1, 2] for _ in range(n)], [])
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n²)"
+    assert res.analysis_complete
+
+
+def test_42_cache_diagonal_state_traversal(analyzer: ComplexityAnalyzer):
+    """Test 42: @cache on function where all recursive calls modify both parameters
+    simultaneously visits only diagonal states O(min(n, m)), not full O(n * m).
+    """
+    code = """
+from functools import cache
+
+@cache
+def diagonal_walk(n, m):
+    if n <= 0 or m <= 0:
+        return 0
+    return diagonal_walk(n - 1, m - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(min(n,m))"
+    assert res.space_breakdown.cache_retained == "O(min(n,m))"
+
+
+def test_43_cache_invariant_parameter_linear(analyzer: ComplexityAnalyzer):
+    """Test 43: @cache with multiple parameters where secondary parameters are invariant
+    restricts state space to single-variable O(n), not multi-variable product.
+    """
+    code = """
+from functools import cache
+
+@cache
+def solve_with_flag(n, debug_flag):
+    if n <= 0:
+        return 0
+    return solve_with_flag(n - 1, debug_flag)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.time_complexity == "O(n)"
+    assert res.space_breakdown.cache_retained == "O(n)"
+
+
+def test_44_recursive_allocation_aliased_deletion_survives(analyzer: ComplexityAnalyzer):
+    """Test 44: When a local allocation has a surviving alias, deleting the original variable name
+    does NOT release the object; heap memory accumulates to O(n²) across active frames.
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    alias = temporary
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_complexity == "O(n²)"
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+    assert res.space_breakdown.auxiliary == "O(n²)"
+
+
+def test_45_recursive_allocation_escaped_container_survives(analyzer: ComplexityAnalyzer):
+    """Test 45: When a local allocation is appended to a container, deleting the variable name
+    does NOT release the object; it escapes and accumulates to O(n²).
+    """
+    code = """
+def process(n):
+    if n <= 0:
+        return 0
+    temporary = [0] * n
+    container.append(temporary)
+    del temporary
+    return process(n - 1)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert res.space_complexity == "O(n²)"
+    assert res.space_breakdown.peak_live_heap == "O(n²)"
+
+
+def test_46_print_custom_object_unresolved_representation(analyzer: ComplexityAnalyzer):
+    """Test 46: print() on custom entity with unmodeled __str__/__repr__ records
+    unresolved cost and reports PARTIAL status instead of assuming O(1).
+    """
+    code = """
+def display(custom_entity):
+    print(custom_entity)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert not res.analysis_complete
+    assert res.analysis_status == "PARTIAL"
+    assert any("custom_entity" in u["reason"] or "print" in u["operation"] for u in res.unresolved_costs)
+
+
+def test_47_print_custom_file_stream_unresolved(analyzer: ComplexityAnalyzer):
+    """Test 47: print() directed to a custom file object has unresolved write() cost."""
+    code = """
+def write_log(custom_stream):
+    print("Execution complete", file=custom_stream)
+"""
+    tree = ast.parse(code)
+    res = analyzer.analyze(tree)
+
+    assert not res.analysis_complete
+    assert res.analysis_status == "PARTIAL"
+    assert any("custom" in u["reason"] and "stream" in u["reason"] for u in res.unresolved_costs)
+
+
+def test_48_legacy_record_deserialization_compatibility():
+    """Test 48: Verifies that legacy database records lacking Phase 1A.1.3 fields
+    deserialize successfully into AnalyzeResponse with LEGACY_RECORD status.
+    """
+    legacy_payload = {
+        "success": True,
+        "time_complexity": "O(n)",
+        "tight_bound": "Θ(n)",
+        "space_complexity": "O(1)",
+        "confidence": "HIGH",
+        "complexity_reasoning": "Legacy analysis output",
+        "statistics": {
+            "function_count": 1,
+            "loop_count": 1,
+            "for_loop_count": 1,
+            "while_loop_count": 0,
+            "conditional_count": 0,
+            "max_nesting_depth": 1,
+            "recursion_detected": False,
+            "recursion_count": 0,
+            "operation_count": 1,
+            "comprehension_count": 0,
+            "imported_modules": [],
+        },
+        "structure": {"nodes": [], "edges": []},
+        "graph": {"active_complexity": "O(n)", "growth_points": []},
+    }
+
+    parsed = AnalyzeResponse.model_validate(legacy_payload)
+    assert parsed.analysis_status == "LEGACY_RECORD"
+    assert parsed.analysis_complete is None
+    assert parsed.known_time_complexity is None
+    assert parsed.unresolved_costs == []
+    assert parsed.space_breakdown.peak_live_heap == "O(1)"
+
+
+def test_49_unresolved_cost_item_structured_validation():
+    """Test 49: Validates structured validation and dual dict/attribute access of UnresolvedCostItem."""
+    from app.schemas.analysis import UnresolvedCostItem
+
+    item = UnresolvedCostItem(
+        operation="custom_method",
+        line=15,
+        context="loop",
+        loop_depth=2,
+        reason="unresolved method invocation",
+    )
+
+    assert item.operation == "custom_method"
+    assert item["operation"] == "custom_method"
+    assert item["loop_depth"] == 2
+    assert item.line == 15

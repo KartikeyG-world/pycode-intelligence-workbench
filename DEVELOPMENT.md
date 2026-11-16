@@ -148,13 +148,13 @@ Control flow analysis must NOT claim or attempt to provide "exact path enumerati
 ### B. Seven-Tier Architecture & Division of Responsibility
 The analysis pipeline adheres to a strict 7-tier layered hierarchy with unidirectional data flow:
 
-1. **AST Layer (`SafeASTParser`)**: Enforces input size boundaries (100 KB / 3,000 lines), AST node limits (10,000 nodes, depth $\le 200$), and parses source into Python standard AST representations without code execution.
-2. **Function Index (`FunctionIndex`)**: Extracts lexical scopes, parameter lists, class/method definitions, decorators, and maps identifiers across scopes.
-3. **Call Graph (`CallGraph`)**: Identifies interprocedural call sites, argument classifications, Tarjan Strongly Connected Components (SCCs), and mutual/direct recursion cycles.
-4. **Control Flow Graph (`CFGBuilder`)**: Constructs basic blocks, control flow edges, entry/exit points, loop headers, and exception handling paths per function scope.
-5. **Recurrence Solver (`RecurrenceSolver` & `RecursionAnalyzer`)**: Solves homogeneous and inhomogeneous recurrence relations extracted from recursive calls.
-6. **Cyclomatic Analyzer (`CyclomaticAnalyzer`)**: Computes McCabe cyclomatic complexity, decision density, and branch counts directly from the CFG block structure.
-7. **Cost Composer (`CostComposer`)**: Synthesizes time complexity, auxiliary/retained space complexity, built-in operation costs, and emits the unified `AnalysisResult` contract.
+1. **AST Layer (`SafeASTParser`)** — **[Implemented and tested]**: Enforces input size boundaries (100 KB / 3,000 lines), AST node limits (10,000 nodes, depth $\le 200$), and parses source into Python standard AST representations without code execution.
+2. **Function Index (`FunctionIndex`)** — **[Implemented and tested]**: Extracts lexical scopes, parameter lists, class/method definitions, decorators, and maps identifiers across scopes.
+3. **Call Graph (`CallGraph`)** — **[Implemented and tested]**: Identifies interprocedural call sites, argument classifications, Tarjan Strongly Connected Components (SCCs), and mutual/direct recursion cycles.
+4. **Control Flow Graph (`CFGBuilder`)** — **[Documented future capability — Phase 1B]**: Constructs basic blocks, control flow edges, entry/exit points, loop headers, and exception handling paths per function scope.
+5. **Recurrence Solver (`RecurrenceSolver` & `RecursionAnalyzer`)** — **[Implemented and tested]**: Solves homogeneous and inhomogeneous recurrence relations extracted from recursive calls.
+6. **Cyclomatic Analyzer (`CyclomaticAnalyzer`)** — **[Documented future capability — Phase 1B]**: Computes McCabe cyclomatic complexity, decision density, and branch counts directly from the CFG block structure.
+7. **Cost Composer (`CostComposer`)** — **[Implemented and tested]**: Synthesizes time complexity, auxiliary/retained space complexity, built-in operation costs, and emits the unified `AnalysisResult` contract.
 
 ### C. Radon as Development-Time Validation Oracle
 External cyclomatic complexity tools (e.g., `radon`) are restricted to development-time test harness oracles and validation baselines (`tests/`). They must NOT be imported, linked, or executed as runtime production dependencies in backend code. The production workbench relies exclusively on internal, verified AST/CFG traversal.
@@ -170,20 +170,22 @@ The workbench implements defense-in-depth resource boundaries within `SafeASTPar
 - **Post-parse Depth Limit**: Rejects AST hierarchies exceeding depth 200 via iterative stack tracking.
 
 ### Residual Parser-Stage Risks & Threat Model
-1. **Interpreter-Level Parser Stack Exhaustion**:
-   `SafeASTParser` utilizes an iterative (non-recursive) queue-based traversal to validate the AST *after* parsing, ensuring the workbench never exhausts Python's call stack during inspection. However, `ast.parse()` itself invokes CPython's internal C-level parser. Sufficiently deep syntactical nesting (e.g., thousands of open parentheses or unary operators) can trigger C stack overflow or memory exhaustion within the C runtime before Python-level validation occurs (per official CPython documentation: https://docs.python.org/3.13/library/ast.html).
-2. **Recoverable vs. Non-Recoverable Parser Errors**:
+1. **Structural AST Parsing vs. Code Execution**:
+   `SafeASTParser` invokes Python's standard library `ast.parse()`, which constructs the structural AST representation without executing code. The workbench strictly prohibits compiling submitted source into executable bytecode (such as `compile(code, "<string>", "exec")`) and strictly prohibits dynamic execution (`eval()`, `exec()`, `subprocess`, or dynamic tracing).
+2. **Interpreter-Level Parser Stack Exhaustion**:
+   `SafeASTParser` utilizes an iterative (non-recursive) queue-based traversal to validate the AST *after* parsing, ensuring the workbench never exhausts Python's call stack during inspection. However, `ast.parse()` itself invokes CPython's internal C-level PEG parser. Pathological inputs with extreme syntactical nesting (e.g., thousands of nested parentheses or unary operators) can theoretically trigger C stack overflow or memory exhaustion within the C runtime before Python-level validation or exception handlers can execute (per official CPython documentation: https://docs.python.org/3.13/library/ast.html).
+3. **Recoverable vs. Non-Recoverable Parser Errors**:
    The analyzer safely intercepts and returns structured `SyntaxErrorInfo` for recoverable Python exceptions: `SyntaxError`, `MemoryError`, `RecursionError`, and `ValueError`. It cannot intercept low-level OS segmentation faults or uncatchable C-stack overflow crashes from malicious C-level inputs.
-3. **Production Isolation Recommendation**:
+4. **Production Isolation Recommendation**:
    For deployments accepting arbitrary, untrusted, or potentially hostile user code, AST parsing should execute inside an isolated ephemeral subprocess or sandboxed worker with strict OS-level CPU/memory `ulimits` (or containerized sandboxes). The current service guarantees AST inspection safety for all valid and standard syntactical forms under strict static-only execution.
 
 ---
 
 ## 9. Static Control Flow Graph vs. Dynamic Branch Coverage Invariants
 
-As Control Flow Graph (CFG) analysis is introduced, the distinction between static structural analysis and dynamic execution measurement must remain absolute:
+As Control Flow Graph (CFG) analysis is introduced in Phase 1B, the distinction between static structural analysis and dynamic execution measurement must remain absolute:
 
-### Static CFG Structural Capabilities
+### Static CFG Structural Capabilities — [Documented future capability — Phase 1B]
 Static CFG analysis analyzes the syntax tree without running the code to compute:
 - Basic block decomposition and possible control-flow edges.
 - Conditional branch points (`if`, `match`, ternary expressions, loop headers).

@@ -71,6 +71,14 @@ export interface UnresolvedCallInfo {
   reason: string;
 }
 
+export interface UnresolvedCostInfo {
+  operation: string;
+  line?: number;
+  context?: string;
+  loop_depth?: number;
+  reason?: string;
+}
+
 export interface AnalyzeResponse {
   success: boolean;
   time_complexity: string;
@@ -99,7 +107,7 @@ export interface AnalyzeResponse {
   analysis_schema_version?: string | null;
   known_time_complexity?: string | null;
   known_space_complexity?: string | null;
-  unresolved_costs?: Record<string, unknown>[];
+  unresolved_costs?: UnresolvedCostInfo[];
   unresolved_calls?: UnresolvedCallInfo[];
   unsupported_patterns?: string[];
   limitations?: string[];

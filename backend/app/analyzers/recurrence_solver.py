@@ -150,8 +150,9 @@ class RecurrenceSolver:
                 rel.peak_live_heap_class = alloc
                 rel.auxiliary_space_class = ComplexityClass.dominant_of(rel.active_frames_class, alloc)
                 rel.derivation_steps.append(
-                    f"Frame allocates {alloc.big_o} heap memory, released before recursive invocation via del. "
-                    f"Peak live heap is bounded by a single frame ({alloc.big_o})."
+                    f"Frame allocates {alloc.big_o} heap memory, verified released before recursive invocation with no surviving aliases or escaped references. "
+                    f"Peak live heap is bounded by a single frame ({alloc.big_o}). "
+                    "(Note: static analysis evaluates reachability of unique live heap objects, not process RSS or operating-system page reclamation)."
                 )
             else:
                 if alloc.category == "linear":
@@ -163,8 +164,9 @@ class RecurrenceSolver:
                 rel.peak_live_heap_class = accumulated_heap
                 rel.auxiliary_space_class = accumulated_heap
                 rel.derivation_steps.append(
-                    f"Each active recursive frame retains {alloc.big_o} heap memory across {var} levels. "
-                    f"Simultaneously live heap memory accumulates to {accumulated_heap.big_o}."
+                    f"Each active recursive frame retains {alloc.big_o} heap memory across {var} levels without prior deallocation. "
+                    f"Simultaneously live heap memory accumulates to {accumulated_heap.big_o}. "
+                    "(Note: static analysis evaluates reachability of unique live heap objects, not process RSS or operating-system page reclamation)."
                 )
         else:
             rel.peak_live_heap_class = ComplexityClass.constant()
@@ -410,11 +412,19 @@ class RecurrenceSolver:
         rel.active_frames_class = ComplexityClass.linear(var)
 
         # Check multi-dimensional state space
-        if len(rel.parameter_names) >= 2:
-            p1, p2 = rel.parameter_names[:2]
-            state_class = ComplexityClass.multi_variable(f"{p1}*{p2}")
+        if state_desc.startswith("Θ(") and state_desc.endswith(")"):
+            inner_expr = state_desc[2:-1].strip()
+        else:
+            inner_expr = state_desc.strip()
+
+        if "min(" in state_desc:
+            state_class = ComplexityClass.multi_variable(inner_expr)
+        elif "*" in state_desc:
+            state_class = ComplexityClass.multi_variable(inner_expr)
         elif "W" in state_desc:
             state_class = ComplexityClass.multi_variable(f"{var}*W")
+        elif len(rel.parameter_names) >= 1:
+            state_class = ComplexityClass.linear(rel.parameter_names[0])
         else:
             state_class = ComplexityClass.linear(var)
 
@@ -441,12 +451,18 @@ class RecurrenceSolver:
 
         rel.is_solved = True
         rel.confidence = "HIGH"
+        entry_count_desc = (
+            f"Bounded by fixed LRU capacity (O(1) entries)"
+            if rel.is_bounded_cache
+            else f"Bounded by reachable state count {state_desc}"
+        )
         rel.derivation_steps = [
             "Memoization table / cache detected for recursive state transitions.",
             f"State space is bounded by distinct subproblem states: {state_desc}.",
+            f"Cache entry count: {entry_count_desc}. Each entry retains references to argument keys and computed return values.",
+            f"Retained byte-memory: {rel.cache_retained_class.big_o} (Note: entry count bounds table entries, while byte-memory scales with payload sizes).",
             "Each state is computed at most once; subsequent queries are resolved in O(1) time.",
             f"Total time complexity reduces from naive exponential to {rel.solved_complexity.tight_bound}.",
-            f"Cache retained memory: {rel.cache_retained_class.big_o} under standard hash distribution.",
         ]
         rel.confidence_reasons = [
             "Cache lookup / assignment verified in AST.",

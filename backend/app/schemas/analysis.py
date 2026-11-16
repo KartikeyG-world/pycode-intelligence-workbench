@@ -93,6 +93,17 @@ class RecurrenceInfo(BaseModel):
     derivation_steps: List[str] = Field(default_factory=list)
 
 
+class UnresolvedCostItem(BaseModel):
+    operation: str
+    line: Optional[int] = None
+    context: Optional[str] = None
+    loop_depth: Optional[int] = 0
+    reason: Optional[str] = None
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+
 class AnalyzeResponse(BaseModel):
     success: bool
     time_complexity: str
@@ -121,7 +132,7 @@ class AnalyzeResponse(BaseModel):
     analysis_schema_version: Optional[str] = None
     known_time_complexity: Optional[str] = None
     known_space_complexity: Optional[str] = None
-    unresolved_costs: List[Dict[str, Any]] = Field(default_factory=list)
+    unresolved_costs: List[UnresolvedCostItem] = Field(default_factory=list)
     unresolved_calls: List[Dict[str, Any]] = Field(default_factory=list)
     unsupported_patterns: List[str] = Field(default_factory=list)
     limitations: List[str] = Field(default_factory=list)

@@ -751,7 +751,22 @@ class CostComposer:
         call = site.call_node
 
         if fname == "print":
+            has_custom_stream = False
+            if call and call.keywords:
+                for kw in call.keywords:
+                    if kw.arg == "file" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+                        if isinstance(kw.value, ast.Attribute) and kw.value.attr in ("stdout", "stderr"):
+                            pass
+                        else:
+                            has_custom_stream = True
+
+            if has_custom_stream:
+                return ComplexityClass.unknown("custom stream writer on print()"), False, "print() to custom file/stream object has unresolved write() cost"
+
             has_container_arg = False
+            has_unresolved_arg = False
+            unresolved_arg_name = ""
+
             if call and call.args:
                 for arg in call.args:
                     if isinstance(arg, (ast.List, ast.Dict, ast.Set, ast.Tuple, ast.ListComp)):
@@ -759,9 +774,23 @@ class CostComposer:
                     elif isinstance(arg, ast.Name):
                         if any(kw in arg.id.lower() for kw in ("arr", "list", "items", "matrix", "grid", "data")):
                             has_container_arg = True
+                        elif any(kw in arg.id.lower() for kw in ("obj", "entity", "model", "record", "custom")):
+                            has_unresolved_arg = True
+                            unresolved_arg_name = arg.id
+                    elif isinstance(arg, ast.Call):
+                        has_unresolved_arg = True
+                        unresolved_arg_name = ast.unparse(arg) if hasattr(ast, "unparse") else "call"
+
+            if has_unresolved_arg:
+                return (
+                    ComplexityClass.unknown(f"unresolved representation for '{unresolved_arg_name}'"),
+                    False,
+                    f"print() with custom object or call '{unresolved_arg_name}' has unresolved __str__/__repr__ cost",
+                )
+
             if has_container_arg:
-                return ComplexityClass.linear(), True, "print() formatting and stream write proportional to container size O(n)"
-            return ComplexityClass.constant(), True, "print() with scalar/constant arguments evaluates in O(1)"
+                return ComplexityClass.linear(), True, "print() formatting and stream write proportional to container size O(n) (assuming primitive element representation)"
+            return ComplexityClass.constant(), True, "print() with scalar/constant arguments evaluates in O(1) (assuming bounded output stream write)"
 
         if fname == "len":
             return ComplexityClass.constant(), True, "len() on established built-in sized container is O(1) (assuming standard __len__)"
@@ -776,10 +805,24 @@ class CostComposer:
                 and isinstance(start_arg.func, ast.Name)
                 and start_arg.func.id in ("list", "tuple")
             ):
+                first_arg = call.args[0]
+                is_inner_param = False
+                if isinstance(first_arg, ast.ListComp):
+                    if isinstance(first_arg.elt, ast.BinOp) and isinstance(first_arg.elt.op, ast.Mult):
+                        is_inner_param = True
+                    elif isinstance(first_arg.elt, ast.ListComp):
+                        is_inner_param = True
+
+                if is_inner_param:
+                    return (
+                        ComplexityClass.polynomial(3.0),
+                        True,
+                        "sum() with container start argument on parameterized 2D collection (k=n inner lists of length m=n) repeated concatenation scales as Theta(m * k^2) = O(n^3)",
+                    )
                 return (
                     ComplexityClass.polynomial(2.0),
                     True,
-                    "sum() with container start argument concatenates lists in quadratic O(n^2) time",
+                    "sum() with container start argument repeatedly concatenates lists in T(k) = sum_{i=1}^k sum_{j=1}^i l_j. For k inner lists of bounded size m = O(1), this requires quadratic O(k^2) time. For equal-sized parameterized inner lists of length m, cost scales as Theta(m * k^2) (or O(n^3) when k = m = n).",
                 )
 
         if fname in ("min", "max", "sum"):
@@ -829,7 +872,11 @@ class CostComposer:
                         return ComplexityClass.linearithmic(), True, f"sorted() with built-in key '{key_name}' in O(n log n)"
                     else:
                         return ComplexityClass.unknown(f"unresolved key function '{key_name}'"), False, f"sorted() with unresolved key function '{key_name}'"
-            return ComplexityClass.linearithmic(), True, "sorted() Timsort worst-case O(n log n)"
+            return (
+                ComplexityClass.linearithmic(),
+                True,
+                "sorted() Timsort worst-case O(n log n) (assuming O(1) comparison cost for primitive elements; non-constant __lt__ scales total time as O(n log n * T_cmp))",
+            )
 
         if fname in BUILTIN_COST_MODEL:
             return BUILTIN_COST_MODEL[fname], True, f"Built-in function '{fname}'"

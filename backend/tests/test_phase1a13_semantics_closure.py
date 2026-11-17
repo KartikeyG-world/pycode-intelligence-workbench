@@ -2153,3 +2153,137 @@ def test_118_log_token_not_split_into_letters():
     assert c_log.poly_degree == 0.0
     assert c_log.log_degree == 1.0
     assert c_log.big_o == "O(log n)"
+
+
+# ==============================================================================
+# 17. MIXED EXPONENTIAL & FACTORIAL MULTI-VARIABLE DOMINANCE (Tests 119 - 126)
+# ==============================================================================
+
+
+def test_119_mixed_exponential_polynomial_different_vars_pareto_preserved():
+    """Test 119: 2^n * m^100 vs 3^n * m form an incomparable Pareto pair preserved in both orders."""
+    c_a = ComplexityClass.from_big_o("O(2^n * m^100)")
+    c_b = ComplexityClass.from_big_o("O(3^n * m)")
+    assert set(c_a.variables) == {"m", "n"}
+    assert set(c_b.variables) == {"m", "n"}
+
+    dom_fwd = ComplexityClass.dominant_of(c_a, c_b)
+    dom_rev = ComplexityClass.dominant_of(c_b, c_a)
+    expected = ("O(3^n * m + 2^n * m^100)", "O(2^n * m^100 + 3^n * m)")
+    assert dom_fwd.big_o in expected
+    assert dom_rev.big_o in expected
+    assert dom_fwd.big_o == dom_rev.big_o
+
+
+def test_120_mixed_exponential_juxtaposition_without_explicit_multiplication():
+    """Test 120: 2^n m^100 and 3^n m written with juxtaposition parse and preserve Pareto pair."""
+    c_a = ComplexityClass.from_big_o("O(2^n m^100)")
+    c_b = ComplexityClass.from_big_o("O(3^n m)")
+    assert set(c_a.variables) == {"m", "n"}
+    assert set(c_b.variables) == {"m", "n"}
+
+    dom_fwd = ComplexityClass.dominant_of(c_a, c_b)
+    dom_rev = ComplexityClass.dominant_of(c_b, c_a)
+    expected = ("O(3^n m + 2^n m^100)", "O(2^n m^100 + 3^n m)")
+    assert dom_fwd.big_o in expected
+    assert dom_rev.big_o in expected
+    assert dom_fwd.big_o == dom_rev.big_o
+
+
+def test_121_exponential_dominates_higher_polynomial_multiplier_same_variable():
+    """Test 121: 3^n * n^2 strictly dominates 2^n * n^100 in both call orders ((3/2)^n >> n^98)."""
+    c_3n = ComplexityClass.from_big_o("O(3^n * n^2)")
+    c_2n = ComplexityClass.from_big_o("O(2^n * n^100)")
+    assert c_3n.category == "exponential" and c_3n.exp_base == 3.0
+    assert c_2n.category == "exponential" and c_2n.exp_base == 2.0
+
+    dom_fwd = ComplexityClass.dominant_of(c_3n, c_2n)
+    dom_rev = ComplexityClass.dominant_of(c_2n, c_3n)
+    expected = ("O(3^n * n^2)", "O(n^2 * 3^n)")
+    assert dom_fwd.big_o in expected
+    assert dom_rev.big_o in expected
+    assert dom_fwd.big_o == dom_rev.big_o
+
+
+def test_122_exponential_dominates_with_identical_polynomial_multiplier():
+    """Test 122: 3^n * m strictly dominates 2^n * m in both call orders (base 3 > 2 with matching m)."""
+    c_3nm = ComplexityClass.from_big_o("O(3^n * m)")
+    c_2nm = ComplexityClass.from_big_o("O(2^n * m)")
+
+    dom_fwd = ComplexityClass.dominant_of(c_3nm, c_2nm)
+    dom_rev = ComplexityClass.dominant_of(c_2nm, c_3nm)
+    assert dom_fwd.big_o == "O(3^n * m)"
+    assert dom_rev.big_o == "O(3^n * m)"
+
+
+def test_123_independent_exponential_variables_pareto_preserved():
+    """Test 123: 2^n vs 3^m with independent variables are preserved as an incomparable Pareto pair."""
+    c_2n = ComplexityClass.from_big_o("O(2^n)")
+    c_3m = ComplexityClass.from_big_o("O(3^m)")
+
+    dom_fwd = ComplexityClass.dominant_of(c_2n, c_3m)
+    dom_rev = ComplexityClass.dominant_of(c_3m, c_2n)
+    expected = ("O(2^n + 3^m)", "O(3^m + 2^n)")
+    assert dom_fwd.big_o in expected
+    assert dom_rev.big_o in expected
+    assert dom_fwd.big_o == dom_rev.big_o
+
+
+def test_124_factorial_with_polynomial_multipliers_and_order_invariance():
+    """Test 124: n!m^100 dominates n!m; n! == n!; n! dominates 3^n in both orders."""
+    # 1. n!m vs n!m^100 (juxtaposition)
+    c_fact_m1 = ComplexityClass.from_big_o("O(n!m)")
+    c_fact_m100 = ComplexityClass.from_big_o("O(n!m^100)")
+    dom_juxt_fwd = ComplexityClass.dominant_of(c_fact_m1, c_fact_m100)
+    dom_juxt_rev = ComplexityClass.dominant_of(c_fact_m100, c_fact_m1)
+    assert dom_juxt_fwd.big_o == "O(n!m^100)"
+    assert dom_juxt_rev.big_o == "O(n!m^100)"
+
+    # 2. n! * m vs n! * m^100 (explicit multiplication)
+    c_star_m1 = ComplexityClass.from_big_o("O(n! * m)")
+    c_star_m100 = ComplexityClass.from_big_o("O(n! * m^100)")
+    dom_star_fwd = ComplexityClass.dominant_of(c_star_m1, c_star_m100)
+    dom_star_rev = ComplexityClass.dominant_of(c_star_m100, c_star_m1)
+    assert dom_star_fwd.big_o == "O(n! * m^100)"
+    assert dom_star_rev.big_o == "O(n! * m^100)"
+
+    # 3. n! vs n! (equivalence)
+    c_nfact1 = ComplexityClass.from_big_o("O(n!)")
+    c_nfact2 = ComplexityClass.from_big_o("O(n!)")
+    dom_eq_fwd = ComplexityClass.dominant_of(c_nfact1, c_nfact2)
+    dom_eq_rev = ComplexityClass.dominant_of(c_nfact2, c_nfact1)
+    assert dom_eq_fwd.big_o == "O(n!)"
+    assert dom_eq_rev.big_o == "O(n!)"
+
+    # 4. n! vs 3^n (factorial dominates exponential)
+    c_3n = ComplexityClass.from_big_o("O(3^n)")
+    dom_fact_exp_fwd = ComplexityClass.dominant_of(c_nfact1, c_3n)
+    dom_fact_exp_rev = ComplexityClass.dominant_of(c_3n, c_nfact1)
+    assert dom_fact_exp_fwd.big_o == "O(n!)"
+    assert dom_fact_exp_rev.big_o == "O(n!)"
+
+
+def test_125_independent_factorial_dimensions_pareto_preserved():
+    """Test 125: n! and m! along independent dimensions are preserved as incomparable Pareto pair."""
+    c_nfact = ComplexityClass.from_big_o("O(n!)")
+    c_mfact = ComplexityClass.from_big_o("O(m!)")
+
+    dom_fwd = ComplexityClass.dominant_of(c_nfact, c_mfact)
+    dom_rev = ComplexityClass.dominant_of(c_mfact, c_nfact)
+    expected = ("O(n! + m!)", "O(m! + n!)")
+    assert dom_fwd.big_o in expected
+    assert dom_rev.big_o in expected
+    assert dom_fwd.big_o == dom_rev.big_o
+
+
+def test_126_factorial_and_exponential_with_independent_poly_multiplier_pareto():
+    """Test 126: n! * m vs 3^n * m^100 are incomparable; presence of n! does not collapse m^100."""
+    c_fact_m = ComplexityClass.from_big_o("O(n! * m)")
+    c_exp_m100 = ComplexityClass.from_big_o("O(3^n * m^100)")
+
+    dom_fwd = ComplexityClass.dominant_of(c_fact_m, c_exp_m100)
+    dom_rev = ComplexityClass.dominant_of(c_exp_m100, c_fact_m)
+    expected = ("O(n! * m + 3^n * m^100)", "O(3^n * m^100 + n! * m)")
+    assert dom_fwd.big_o in expected
+    assert dom_rev.big_o in expected
+    assert dom_fwd.big_o == dom_rev.big_o

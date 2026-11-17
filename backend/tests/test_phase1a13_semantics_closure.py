@@ -2052,3 +2052,104 @@ def test_110_case_e_polynomial_multidimensional_comparisons_preserved():
     dom_e2_rev = ComplexityClass.dominant_of(c_n3m, c_n2m)
     assert dom_e2_fwd.big_o in ("O(n^3m)", "O(n³*m)")
     assert dom_e2_rev.big_o in ("O(n^3m)", "O(n³*m)")
+
+
+# ==============================================================================
+# 16. COMPLEXITY GRAMMAR & NON-POLYNOMIAL COMPATIBILITY (Tests 111 - 118)
+# ==============================================================================
+
+
+def test_111_exponential_dominates_high_degree_polynomial():
+    """Test 111: O(2^n) strictly dominates high degree polynomial O(n^100) in both orders."""
+    c_exp2 = ComplexityClass.from_big_o("O(2^n)")
+    c_poly100 = ComplexityClass.from_big_o("O(n^100)")
+    assert c_exp2.category == "exponential"
+    assert c_poly100.category == "polynomial"
+
+    dom_fwd = ComplexityClass.dominant_of(c_exp2, c_poly100)
+    dom_rev = ComplexityClass.dominant_of(c_poly100, c_exp2)
+    assert dom_fwd.big_o == "O(2^n)"
+    assert dom_rev.big_o == "O(2^n)"
+
+
+def test_112_factorial_dominates_exponential():
+    """Test 112: O(n!) strictly dominates exponential O(3^n) in both orders."""
+    c_fact = ComplexityClass.from_big_o("O(n!)")
+    c_exp3 = ComplexityClass.from_big_o("O(3^n)")
+    assert c_fact.category == "factorial"
+    assert c_exp3.category == "exponential"
+
+    dom_fwd = ComplexityClass.dominant_of(c_fact, c_exp3)
+    dom_rev = ComplexityClass.dominant_of(c_exp3, c_fact)
+    assert dom_fwd.big_o == "O(n!)"
+    assert dom_rev.big_o == "O(n!)"
+
+
+def test_113_higher_base_exponential_dominance_order_invariant():
+    """Test 113: O(3^n) strictly dominates O(2^n) in both forward and reverse orders."""
+    c_exp3 = ComplexityClass.from_big_o("O(3^n)")
+    c_exp2 = ComplexityClass.from_big_o("O(2^n)")
+    assert c_exp3.category == "exponential" and c_exp3.exp_base == 3.0
+    assert c_exp2.category == "exponential" and c_exp2.exp_base == 2.0
+
+    dom_fwd = ComplexityClass.dominant_of(c_exp3, c_exp2)
+    dom_rev = ComplexityClass.dominant_of(c_exp2, c_exp3)
+    assert dom_fwd.big_o == "O(3^n)"
+    assert dom_rev.big_o == "O(3^n)"
+
+
+def test_114_unsupported_exponential_and_factorial_syntax_rejected():
+    """Test 114: Malformed or unsupported exponential/factorial syntax does not become polynomial."""
+    unsupported_expressions = [
+        "O(2^)",
+        "O(^n)",
+        "O(2^(n^2))",
+        "O(n^n)",
+        "O(2^x^2)",
+        "O(n!!)",
+        "O((n!)!)",
+    ]
+    for expr in unsupported_expressions:
+        c = ComplexityClass.from_big_o(expr)
+        assert c.category == "unsupported", f"Expected unsupported for {expr}, got {c.category}"
+        assert c.poly_degree == 0.0, f"Fabricated polynomial degree for {expr}: {c.poly_degree}"
+        assert c.big_o == "Unsupported / Cannot Determine"
+
+
+def test_115_symbolic_variable_products_supported():
+    """Test 115: Canonical single-letter variable products nm and n*m are correctly supported."""
+    c_nm = ComplexityClass.from_big_o("O(nm)")
+    assert c_nm.variables == ("m", "n")
+    assert c_nm.poly_degree == 2.0
+    assert c_nm.big_o == "O(nm)"
+
+    c_times = ComplexityClass.from_big_o("O(n*m)")
+    assert c_times.variables == ("m", "n")
+    assert c_times.poly_degree == 2.0
+    assert c_times.big_o == "O(n*m)"
+
+
+def test_116_ambiguous_multi_letter_identifier_rejected():
+    """Test 116: Ambiguous multi-letter identifier 'array' is rejected and not treated as a^2*r^2*y."""
+    c_arr = ComplexityClass.from_big_o("O(array)")
+    assert c_arr.category == "unsupported"
+    assert c_arr.poly_degree == 0.0
+    assert c_arr.big_o == "Unsupported / Cannot Determine"
+
+
+def test_117_unsupported_code_identifier_with_underscore_rejected():
+    """Test 117: Code identifier with underscore 'num_items' is rejected and not treated as polynomial."""
+    c_items = ComplexityClass.from_big_o("O(num_items)")
+    assert c_items.category == "unsupported"
+    assert c_items.poly_degree == 0.0
+    assert c_items.big_o == "Unsupported / Cannot Determine"
+
+
+def test_118_log_token_not_split_into_letters():
+    """Test 118: O(log n) preserves log operator and does not split into variables l, o, g."""
+    c_log = ComplexityClass.from_big_o("O(log n)")
+    assert c_log.category == "logarithmic"
+    assert c_log.variables == ("n",)
+    assert c_log.poly_degree == 0.0
+    assert c_log.log_degree == 1.0
+    assert c_log.big_o == "O(log n)"

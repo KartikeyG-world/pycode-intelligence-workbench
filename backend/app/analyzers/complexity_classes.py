@@ -94,16 +94,58 @@ class ComplexityClass:
             terms = [cls.from_big_o(f"O({t.strip()})", is_tight=tight) for t in inner.split("+")]
             all_v = tuple(sorted(set.union(*[set(cls._get_class_vars(t)) for t in terms])))
             return cls("custom", custom_str=inner, variables=all_v, is_tight=tight)
-        if inner in ("2^n", "2ⁿ"):
-            return cls("exponential", exp_base=2.0, is_tight=tight)
-        if inner in ("3^n", "3ⁿ"):
-            return cls("exponential", exp_base=3.0, is_tight=tight)
-        if inner in ("n!",):
-            return cls("factorial", is_tight=tight)
         if "Unsupported" in inner:
             return cls.unsupported()
         if "Unknown" in inner:
             return cls.unknown(inner)
+
+        # 1. Underscore check: identifiers with '_' are unsupported code tokens (e.g. num_items)
+        if "_" in inner:
+            return cls.unsupported(f"Unsupported identifier with underscore: '{inner}'")
+
+        # 2. Factorial check: single-variable standard factorial (e.g. n!, m!, k!)
+        if "!" in inner:
+            m_fact = re.match(r"^([a-zA-Z])!$", inner)
+            if m_fact:
+                return cls("factorial", variables=(m_fact.group(1),), is_tight=tight)
+            return cls.unsupported(f"Unsupported factorial syntax: '{inner}'")
+
+        # 3. Exponential check: standard numeric bases with single-variable exponents (e.g. 2^n, 3^n, 1.62^n, 2ⁿ)
+        if inner in ("2^n", "2ⁿ"):
+            return cls("exponential", exp_base=2.0, is_tight=tight)
+        if inner in ("3^n", "3ⁿ"):
+            return cls("exponential", exp_base=3.0, is_tight=tight)
+        m_exp = re.match(r"^(\d+(?:\.\d+)?)\^([a-zA-Z])$", inner)
+        if m_exp:
+            return cls("exponential", exp_base=float(m_exp.group(1)), variables=(m_exp.group(2),), is_tight=tight)
+        m_exp_sup = re.match(r"^(\d+(?:\.\d+)?)([ⁿᵐᵏ])$", inner)
+        if m_exp_sup:
+            sup_char = m_exp_sup.group(2)
+            var_map = {"ⁿ": "n", "ᵐ": "m", "ᵏ": "k"}
+            return cls("exponential", exp_base=float(m_exp_sup.group(1)), variables=(var_map.get(sup_char, "n"),), is_tight=tight)
+        m_poly_exp = re.match(r"^([a-zA-Z])(?:\^(\d+)|([²³⁴⁵⁶⁷⁸⁹]))?\s*\*?\s*(\d+(?:\.\d+)?)\^([a-zA-Z])$", inner)
+        if m_poly_exp:
+            v_poly = m_poly_exp.group(1)
+            p_deg = float(m_poly_exp.group(2)) if m_poly_exp.group(2) else ({"²": 2.0, "³": 3.0, "⁴": 4.0, "⁵": 5.0}.get(m_poly_exp.group(3), 1.0) if m_poly_exp.group(3) else 1.0)
+            base_val = float(m_poly_exp.group(4))
+            v_exp = m_poly_exp.group(5)
+            if v_poly == v_exp:
+                return cls("exponential", exp_base=base_val, poly_factor=p_deg, variables=(v_exp,), is_tight=tight)
+
+        # 4. Check for unsupported exponent patterns:
+        # e.g., variable to variable (n^n), nested exponents 2^(n^2), incomplete 2^ or ^n, towers 2^x^2
+        if "^" in inner and "log" not in inner:
+            clean_poly_exp = re.sub(r"[a-zA-Z]\^(\d+(?:\.\d+)?)", "", inner)
+            if "^" in clean_poly_exp:
+                return cls.unsupported(f"Unsupported exponent syntax: '{inner}'")
+
+        # 5. Check for ambiguous multi-letter identifiers:
+        # Canonical variables are single letters; adjacent letters denote implicit multiplication of single variables (e.g. nm).
+        # Multi-letter word tokens (len >= 3, e.g. 'array') or repeated letters (e.g. 'aa') are ambiguous/unsupported.
+        masked = re.sub(r"\b(?:log|min|max|Theta|Θ)\b", " ", inner)
+        for w in re.findall(r"[a-zA-Z]+", masked):
+            if len(w) >= 3 or (len(w) == 2 and w[0] == w[1]):
+                return cls.unsupported(f"Ambiguous multi-letter identifier: '{inner}'")
 
         if "log" in inner:
             poly_exps, log_exps = cls._extract_monomial_components(inner)
@@ -233,7 +275,7 @@ class ComplexityClass:
 
     def rank_score(self) -> float:
         """Numerical ranking to evaluate dominance in sums max(f(n), g(n))."""
-        if self.category == "unknown":
+        if self.category in ("unknown", "unsupported"):
             return -1.0
         if self.category == "constant":
             return 0.0
@@ -362,12 +404,26 @@ class ComplexityClass:
             return True
         if cat_a == "factorial" and cat_b != "factorial":
             return False
+        if cat_b == "factorial" and cat_a == "factorial":
+            if not vars_a or vars_a == vars_b or vars_a.issubset(vars_b):
+                return True
+            return False
+
         if cat_b == "exponential" and cat_a in ("constant", "logarithmic", "linear", "linearithmic", "polynomial"):
             if not vars_a or vars_a == vars_b or vars_a.issubset(vars_b):
                 return True
         if cat_a == "exponential" and cat_b in ("constant", "logarithmic", "linear", "linearithmic", "polynomial"):
             if not vars_b or vars_b == vars_a or vars_b.issubset(vars_a):
                 return False
+
+        if cat_b == "exponential" and cat_a == "exponential":
+            if not vars_a or vars_a == vars_b or vars_a.issubset(vars_b):
+                if c_b.exp_base > c_a.exp_base:
+                    return True
+                if c_b.exp_base == c_a.exp_base:
+                    return c_b.poly_degree >= c_a.poly_degree
+                return False
+            return False
 
         poly_a, log_a = cls._extract_monomial_components(c_a._raw_expression())
         poly_b, log_b = cls._extract_monomial_components(c_b._raw_expression())

@@ -1984,3 +1984,71 @@ def process(n):
     res = analyzer.analyze(tree)
     assert res.space_breakdown.peak_live_heap == "O(n²)"
     assert res.space_complexity == "O(n²)"
+
+
+def test_106_case_a_logarithmic_dominance_over_linear():
+    """Test 106: Case A - Logarithmic factor dominance over linear alone:
+    dominant_of(O(n log n), O(n)) == O(n log n) in both forward and reverse orders.
+    """
+    c_log = ComplexityClass.from_big_o("O(n log n)")
+    c_lin = ComplexityClass.from_big_o("O(n)")
+    dom_fwd = ComplexityClass.dominant_of(c_log, c_lin)
+    dom_rev = ComplexityClass.dominant_of(c_lin, c_log)
+    assert dom_fwd.big_o == "O(n log n)"
+    assert dom_rev.big_o == "O(n log n)"
+
+
+def test_107_case_b_higher_logarithmic_power_dominance():
+    """Test 107: Case B - Higher logarithmic power dominance with identical polynomial degree:
+    dominant_of(O(n log^2 n), O(n log n)) == O(n log^2 n) in both forward and reverse orders.
+    """
+    c_log2 = ComplexityClass.from_big_o("O(n log^2 n)")
+    c_log1 = ComplexityClass.from_big_o("O(n log n)")
+    dom_fwd = ComplexityClass.dominant_of(c_log2, c_log1)
+    dom_rev = ComplexityClass.dominant_of(c_log1, c_log2)
+    assert dom_fwd.big_o == "O(n log^2 n)"
+    assert dom_rev.big_o == "O(n log^2 n)"
+
+
+def test_108_case_c_polynomial_power_dominates_higher_logarithmic_power():
+    """Test 108: Case C - Any strictly higher polynomial degree asymptotically dominates
+    arbitrary logarithmic powers: dominant_of(O(n^2), O(n log^5 n)) == O(n²) in both orders.
+    """
+    c_poly2 = ComplexityClass.from_big_o("O(n^2)")
+    c_log5 = ComplexityClass.from_big_o("O(n log^5 n)")
+    dom_fwd = ComplexityClass.dominant_of(c_poly2, c_log5)
+    dom_rev = ComplexityClass.dominant_of(c_log5, c_poly2)
+    assert dom_fwd.big_o in ("O(n²)", "O(n^2)")
+    assert dom_rev.big_o in ("O(n²)", "O(n^2)")
+
+
+def test_109_case_d_independent_dimensions_with_logarithm_preserved():
+    """Test 109: Case D - Independent input dimensions n and m with logarithmic factors
+    preserve both incomparable Pareto contributions: dominant_of(O(n log n), O(m^2)).
+    """
+    c_nlog = ComplexityClass.from_big_o("O(n log n)")
+    c_m2 = ComplexityClass.from_big_o("O(m^2)")
+    dom_fwd = ComplexityClass.dominant_of(c_nlog, c_m2)
+    dom_rev = ComplexityClass.dominant_of(c_m2, c_nlog)
+    valid_outputs = ("O(n log n + m²)", "O(n log n + m^2)", "O(m² + n log n)", "O(m^2 + n log n)")
+    assert dom_fwd.big_o in valid_outputs
+    assert dom_rev.big_o in valid_outputs
+
+
+def test_110_case_e_polynomial_multidimensional_comparisons_preserved():
+    """Test 110: Case E - Preservation of existing multidimensional polynomial dominance:
+    1. O(n^2m) vs O(nm^3) -> O(n^2m + nm^3) (incomparable, preserved in both orders)
+    2. O(n^2m) vs O(n^3m) -> O(n^3m) (comparable, strictly dominated in both orders)
+    """
+    c_n2m = ComplexityClass.from_big_o("O(n^2m)")
+    c_nm3 = ComplexityClass.from_big_o("O(nm^3)")
+    dom_e1_fwd = ComplexityClass.dominant_of(c_n2m, c_nm3)
+    dom_e1_rev = ComplexityClass.dominant_of(c_nm3, c_n2m)
+    assert dom_e1_fwd.big_o in ("O(n^2m + nm^3)", "O(n²*m + n*m³)", "O(nm^3 + n^2m)", "O(n*m³ + n²*m)")
+    assert dom_e1_rev.big_o in ("O(n^2m + nm^3)", "O(n²*m + n*m³)", "O(nm^3 + n^2m)", "O(n*m³ + n²*m)")
+
+    c_n3m = ComplexityClass.from_big_o("O(n^3m)")
+    dom_e2_fwd = ComplexityClass.dominant_of(c_n2m, c_n3m)
+    dom_e2_rev = ComplexityClass.dominant_of(c_n3m, c_n2m)
+    assert dom_e2_fwd.big_o in ("O(n^3m)", "O(n³*m)")
+    assert dom_e2_rev.big_o in ("O(n^3m)", "O(n³*m)")

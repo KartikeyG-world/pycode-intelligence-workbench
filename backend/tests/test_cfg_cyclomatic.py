@@ -196,3 +196,51 @@ def match_test(status):
         assert cfg.cyclomatic_status == "PARTIAL"
         assert "PEP 634 match/case statements are deferred to Phase 1B.2" in cfg.limitations
         assert cfg.decision_points == {"match_case": 3}
+
+    def test_unsupported_status_contract(self):
+        builder = CFGBuilder(scope_id="unsupported_fn@1", name="unsupported_fn", scope_type="function")
+        builder.mark_unsupported("Inline assembly or unsupported dynamic bytecode syntax")
+        cfg = builder.build_from_body([])
+
+        assert cfg.cyclomatic_status == "UNSUPPORTED"
+        assert cfg.cyclomatic_complexity is None
+        assert cfg.risk_rank is None
+        assert cfg.is_provisional is False
+        assert "Inline assembly or unsupported dynamic bytecode syntax" in cfg.limitations
+
+    def test_partial_status_provisional_contract(self):
+        code = """
+def partial_comprehension(nums):
+    return [x for x in nums if x > 0]
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["partial_comprehension@2"]
+
+        assert cfg.cyclomatic_status == "PARTIAL"
+        assert cfg.is_provisional is True
+        assert cfg.risk_rank is None  # Unqualified risk rank must not be exposed for PARTIAL
+        assert cfg.cyclomatic_complexity == cfg.decision_cyclomatic
+        assert cfg.graph_cyclomatic is not None
+        assert cfg.cyclomatic_discrepancy == cfg.decision_cyclomatic - cfg.graph_cyclomatic
+
+    def test_try_finally_cleanup_limitations(self):
+        code = """
+def try_finally_check(x):
+    try:
+        if x < 0:
+            raise ValueError("negative")
+        return x
+    finally:
+        cleanup()
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["try_finally_check@2"]
+
+        assert cfg.cyclomatic_status == "PARTIAL"
+        assert "Finally cleanup transitions on abrupt control transfers (return/break/raise/continue) are summarized" in cfg.limitations
+        assert "Exception flow does not represent all statement-level implicit exceptions" in cfg.limitations
+        # Verify candidate dispatch edge exists
+        edge_types = [e.edge_type for e in cfg.edges]
+        assert "finally_cleanup" in edge_types or "raise" in edge_types

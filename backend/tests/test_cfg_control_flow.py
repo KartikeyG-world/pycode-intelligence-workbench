@@ -346,3 +346,97 @@ def context_use(filepath):
         # with does not add decision points (+0)
         assert cfg.cyclomatic_status == "COMPLETE"
         assert cfg.cyclomatic_complexity == 1
+
+    def test_embedded_bool_op_in_call_return(self):
+        code = """
+def calc_bool(a, b):
+    return calculate(a and b)
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["calc_bool@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"and": 1}
+
+    def test_embedded_if_exp_in_call_return(self):
+        code = """
+def calc_ifexp(a, b, c):
+    return calculate(a if b else c)
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["calc_ifexp@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"if_exp": 1}
+
+    def test_assert_with_bool_op_short_circuit(self):
+        code = """
+def check_assert_or(a, b):
+    assert a or b
+    return 1
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["check_assert_or@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 3  # assert (+1), or (+1)
+        assert cfg.graph_cyclomatic == 3
+        assert cfg.decision_cyclomatic == 3
+        assert cfg.decision_points == {"assert": 1, "or": 1}
+
+    def test_nested_bool_op_in_assignment(self):
+        code = """
+def nested_assign_bool(a, b, c):
+    x = a and (b or c)
+    return x
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["nested_assign_bool@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 3  # and (+1), or (+1)
+        assert cfg.graph_cyclomatic == 3
+        assert cfg.decision_cyclomatic == 3
+        assert cfg.decision_points == {"and": 1, "or": 1}
+
+    def test_nested_if_exp_combinations(self):
+        code = """
+def nested_ternary(a, b, c, d, e):
+    x = (a if b else c) if d else e
+    return x
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["nested_ternary@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 3  # if_exp (+1), if_exp (+1)
+        assert cfg.graph_cyclomatic == 3
+        assert cfg.decision_cyclomatic == 3
+        assert cfg.decision_points == {"if_exp": 2}
+
+    def test_if_exp_with_bool_op_condition(self):
+        code = """
+def ternary_bool_cond(a, b, c, d):
+    x = a if (b and c) else d
+    return x
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["ternary_bool_cond@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 3  # if_exp (+1), and (+1)
+        assert cfg.graph_cyclomatic == 3
+        assert cfg.decision_cyclomatic == 3
+        assert cfg.decision_points == {"if_exp": 1, "and": 1}

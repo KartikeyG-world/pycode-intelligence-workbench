@@ -1,4 +1,5 @@
 import ast
+import copy
 from collections import deque
 from typing import Dict, Any, List, Optional, Set, Tuple, Literal
 
@@ -30,6 +31,19 @@ CFGEdgeType = Literal[
     "except_dispatch",
     "finally_cleanup",
 ]
+
+
+class _ASTMarkerReplacer(ast.NodeTransformer):
+    """Replaces marked AST sub-expressions with replacement AST nodes."""
+
+    def __init__(self, marker: str, replacement: ast.AST):
+        self.marker = marker
+        self.replacement = replacement
+
+    def visit(self, node: ast.AST):
+        if getattr(node, self.marker, False):
+            return copy.deepcopy(self.replacement)
+        return self.generic_visit(node)
 
 
 class BasicBlock:
@@ -147,6 +161,7 @@ class ControlFlowGraph:
         self.decision_cyclomatic: Optional[int] = None
         self.cyclomatic_discrepancy: Optional[int] = None
         self.risk_rank: Optional[Literal["A", "B", "C", "D", "E", "F"]] = None
+        self.is_provisional: bool = False
         self.total_nodes: int = 0
         self.total_edges: int = 0
         self.reachable_nodes: int = 0
@@ -167,6 +182,7 @@ class ControlFlowGraph:
             "decision_cyclomatic": self.decision_cyclomatic,
             "cyclomatic_discrepancy": self.cyclomatic_discrepancy,
             "risk_rank": self.risk_rank,
+            "is_provisional": self.is_provisional,
             "total_nodes": self.total_nodes,
             "total_edges": self.total_edges,
             "reachable_nodes": self.reachable_nodes,
@@ -273,6 +289,55 @@ class CFGBuilder:
             self.limitations.append(limitation)
         self.cfg.cyclomatic_status = "PARTIAL"
 
+    def mark_unsupported(self, reason: str):
+        """Marks the scope cyclomatic status as UNSUPPORTED and records the diagnostic limitation."""
+        self.cfg.cyclomatic_status = "UNSUPPORTED"
+        if reason not in self.limitations:
+            self.limitations.append(reason)
+
+    @staticmethod
+    def _find_first_branching_expr(node: ast.AST) -> Optional[ast.AST]:
+        """Finds the first IfExp or BoolOp in an AST node, excluding comprehensions and lambdas."""
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)):
+                continue
+            if isinstance(child, (ast.IfExp, ast.BoolOp)):
+                return child
+            res = CFGBuilder._find_first_branching_expr(child)
+            if res is not None:
+                return res
+        return None
+
+    @staticmethod
+    def _lower_branching_statement(stmt: ast.stmt) -> Optional[ast.If]:
+        """Lowers a statement containing embedded IfExp or BoolOp into structured if/else statement branches."""
+        target = CFGBuilder._find_first_branching_expr(stmt)
+        if target is None:
+            return None
+        target._mark_replace = True
+        if isinstance(target, ast.IfExp):
+            s_true = _ASTMarkerReplacer("_mark_replace", target.body).visit(copy.deepcopy(stmt))
+            s_false = _ASTMarkerReplacer("_mark_replace", target.orelse).visit(copy.deepcopy(stmt))
+            if_node = ast.If(test=target.test, body=[s_true], orelse=[s_false])
+            ast.copy_location(if_node, stmt)
+            if_node._decision_kind = "if_exp"
+            return if_node
+        elif isinstance(target, ast.BoolOp):
+            op_name = "and" if isinstance(target.op, ast.And) else "or"
+            first = target.values[0]
+            rest = target.values[1] if len(target.values) == 2 else ast.BoolOp(op=target.op, values=target.values[1:])
+            if isinstance(target.op, ast.And):
+                s_true = _ASTMarkerReplacer("_mark_replace", rest).visit(copy.deepcopy(stmt))
+                s_false = _ASTMarkerReplacer("_mark_replace", first).visit(copy.deepcopy(stmt))
+            else:
+                s_true = _ASTMarkerReplacer("_mark_replace", first).visit(copy.deepcopy(stmt))
+                s_false = _ASTMarkerReplacer("_mark_replace", rest).visit(copy.deepcopy(stmt))
+            if_node = ast.If(test=first, body=[s_true], orelse=[s_false])
+            ast.copy_location(if_node, stmt)
+            if_node._decision_kind = op_name
+            return if_node
+        return None
+
     def build_from_body(self, body: List[ast.stmt]) -> ControlFlowGraph:
         """Builds the CFG for the provided sequence of statements."""
         if not body:
@@ -314,20 +379,16 @@ class CFGBuilder:
                 curr.add_statement(stmt)
                 continue
 
-            elif isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.IfExp):
-                curr = self._handle_if_exp_assign(stmt, curr)
-
-            elif isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.IfExp):
-                curr = self._handle_if_exp_return(stmt, curr)
-
-            elif isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.BoolOp):
-                curr = self._handle_bool_op_assign(stmt, curr)
-
-            elif isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.BoolOp):
-                curr = self._handle_bool_op_return(stmt, curr)
-
-            elif isinstance(stmt, ast.Return):
-                curr = self._handle_return(stmt, curr)
+            elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Return, ast.Expr)):
+                lowered_if = self._lower_branching_statement(stmt)
+                if lowered_if is not None:
+                    curr = self._handle_if(lowered_if, curr)
+                    continue
+                if isinstance(stmt, ast.Return):
+                    curr = self._handle_return(stmt, curr)
+                else:
+                    self._inspect_statement_expressions(stmt)
+                    curr.add_statement(stmt)
 
             elif isinstance(stmt, ast.Raise):
                 curr = self._handle_raise(stmt, curr)
@@ -350,7 +411,7 @@ class CFGBuilder:
             elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                 curr = self._handle_with(stmt, curr)
 
-            elif isinstance(stmt, ast.Try):
+            elif isinstance(stmt, (ast.Try, getattr(ast, "TryStar", ast.Try))):
                 curr = self._handle_try(stmt, curr)
 
             elif hasattr(ast, "Match") and isinstance(stmt, ast.Match):
@@ -393,7 +454,7 @@ class CFGBuilder:
         if self.try_stack:
             try_ctx = self.try_stack[-1]
             for h_id in try_ctx.handler_ids:
-                self._add_edge(curr.block_id, h_id, edge_type="except_dispatch", label="raise (handled)")
+                self._add_edge(curr.block_id, h_id, edge_type="except_dispatch", label="except_dispatch (candidate)")
             if try_ctx.finally_id:
                 self._add_edge(curr.block_id, try_ctx.finally_id, edge_type="finally_cleanup", label="raise (unhandled)")
             else:
@@ -424,7 +485,8 @@ class CFGBuilder:
         return curr
 
     def _handle_if(self, stmt: ast.If, curr: BasicBlock) -> BasicBlock:
-        self._record_decision("if", 1)
+        decision_kind = getattr(stmt, "_decision_kind", "if")
+        self._record_decision(decision_kind, 1)
 
         then_start = self._create_block(block_type="basic_block", label="Then")
         has_else = bool(stmt.orelse)
@@ -437,15 +499,24 @@ class CFGBuilder:
                 false_target_id=else_start.block_id,
             )
             self._add_edge(curr.block_id, entry_test.block_id, edge_type="fallthrough")
+        elif isinstance(stmt.test, ast.IfExp):
+            if_exp = stmt.test
+            s_true = ast.If(test=if_exp.body, body=stmt.body, orelse=stmt.orelse)
+            s_false = ast.If(test=if_exp.orelse, body=stmt.body, orelse=stmt.orelse)
+            lowered = ast.If(test=if_exp.test, body=[s_true], orelse=[s_false])
+            ast.copy_location(lowered, stmt)
+            lowered._decision_kind = "if_exp"
+            return self._handle_if(lowered, curr)
         else:
             self._inspect_statement_expressions(stmt)
+            label_prefix = "if_exp" if decision_kind == "if_exp" else ("test" if decision_kind in ("and", "or") else "if")
             if not curr.statements and curr.block_type == "basic_block":
                 header_block = curr
                 header_block.block_type = "branch_header"
-                header_block.label = f"if {ast.unparse(stmt.test)}"
+                header_block.label = f"{label_prefix} {ast.unparse(stmt.test)}"
                 header_block.lineno = stmt.lineno
             else:
-                header_block = self._create_block(block_type="branch_header", label=f"if {ast.unparse(stmt.test)}", lineno=stmt.lineno)
+                header_block = self._create_block(block_type="branch_header", label=f"{label_prefix} {ast.unparse(stmt.test)}", lineno=stmt.lineno)
                 self._add_edge(curr.block_id, header_block.block_id, edge_type="fallthrough")
             header_block.statements.append(stmt.test)
 
@@ -582,24 +653,46 @@ class CFGBuilder:
         return join_block
 
     def _handle_assert(self, stmt: ast.Assert, curr: BasicBlock) -> BasicBlock:
-        self._record_decision("assert", 1)
-        test_label = ast.unparse(stmt.test)
-        test_block = self._create_block(
-            block_type="branch_header",
-            label=f"assert {test_label}",
-            lineno=stmt.lineno,
-        )
-        test_block.statements.append(stmt)
-        self._add_edge(curr.block_id, test_block.block_id, edge_type="fallthrough")
+        """Handles assert statements in normal non-optimized Python execution.
 
+        Contract: In normal Python execution (__debug__ is True), assert test constitutes
+        a conditional branch where failure raises AssertionError. Python's optimized
+        execution mode (-O), where assert statements are removed at compile time by the
+        bytecode compiler, is outside the scope of this static analysis model.
+        """
+        self._record_decision("assert", 1)
         next_block = self._create_block(block_type="basic_block", label="Assert Pass")
         raise_block = self._create_block(block_type="raise_block", label="AssertionError", lineno=stmt.lineno)
         raise_block.statements.append(stmt)
         raise_block.terminator_type = "raise"
-
-        self._add_edge(test_block.block_id, next_block.block_id, edge_type="branch_true", label="Pass")
-        self._add_edge(test_block.block_id, raise_block.block_id, edge_type="branch_false", label="Fail")
         self._add_edge(raise_block.block_id, self.exit_id, edge_type="raise", label="raise AssertionError")
+
+        if isinstance(stmt.test, ast.BoolOp):
+            entry_test = self._build_boolean_expr(
+                expr=stmt.test,
+                true_target_id=next_block.block_id,
+                false_target_id=raise_block.block_id,
+            )
+            self._add_edge(curr.block_id, entry_test.block_id, edge_type="fallthrough")
+        elif isinstance(stmt.test, ast.IfExp):
+            if_exp = stmt.test
+            s_true = ast.Assert(test=if_exp.body, msg=stmt.msg)
+            s_false = ast.Assert(test=if_exp.orelse, msg=stmt.msg)
+            lowered = ast.If(test=if_exp.test, body=[s_true], orelse=[s_false])
+            ast.copy_location(lowered, stmt)
+            lowered._decision_kind = "if_exp"
+            return self._handle_if(lowered, curr)
+        else:
+            self._inspect_statement_expressions(stmt)
+            test_block = self._create_block(
+                block_type="branch_header",
+                label=f"assert {ast.unparse(stmt.test)}",
+                lineno=stmt.lineno,
+            )
+            test_block.statements.append(stmt)
+            self._add_edge(curr.block_id, test_block.block_id, edge_type="fallthrough")
+            self._add_edge(test_block.block_id, next_block.block_id, edge_type="branch_true", label="Pass")
+            self._add_edge(test_block.block_id, raise_block.block_id, edge_type="branch_false", label="Fail")
 
         return next_block
 
@@ -616,8 +709,10 @@ class CFGBuilder:
 
         return cleanup_block
 
-    def _handle_try(self, stmt: ast.Try, curr: BasicBlock) -> BasicBlock:
+    def _handle_try(self, stmt: ast.stmt, curr: BasicBlock) -> BasicBlock:
         self._add_limitation("Exception flow does not represent all statement-level implicit exceptions")
+        if getattr(stmt, "finalbody", None):
+            self._add_limitation("Finally cleanup transitions on abrupt control transfers (return/break/raise/continue) are summarized")
         handler_count = len(stmt.handlers)
         self._record_decision("except_handler", handler_count)
 
@@ -661,121 +756,6 @@ class CFGBuilder:
                 self._add_edge(fin_final.block_id, join_block.block_id, edge_type="fallthrough")
 
         return join_block
-
-    def _handle_if_exp_assign(self, stmt: ast.Assign, curr: BasicBlock) -> BasicBlock:
-        if_exp: ast.IfExp = stmt.value
-        self._record_decision("if_exp", 1)
-
-        test_block = self._create_block(block_type="branch_header", label=f"if {ast.unparse(if_exp.test)}", lineno=stmt.lineno)
-        test_block.statements.append(if_exp.test)
-        self._add_edge(curr.block_id, test_block.block_id, edge_type="fallthrough")
-
-        true_block = self._create_block(block_type="basic_block", label="Assign True")
-        true_assign = ast.Assign(targets=stmt.targets, value=if_exp.body)
-        true_block.statements.append(true_assign)
-
-        false_block = self._create_block(block_type="basic_block", label="Assign False")
-        false_assign = ast.Assign(targets=stmt.targets, value=if_exp.orelse)
-        false_block.statements.append(false_assign)
-
-        join_block = self._create_block(block_type="basic_block", label="Join")
-
-        self._add_edge(test_block.block_id, true_block.block_id, edge_type="branch_true", label="True")
-        self._add_edge(test_block.block_id, false_block.block_id, edge_type="branch_false", label="False")
-        self._add_edge(true_block.block_id, join_block.block_id, edge_type="fallthrough")
-        self._add_edge(false_block.block_id, join_block.block_id, edge_type="fallthrough")
-
-        return join_block
-
-    def _handle_if_exp_return(self, stmt: ast.Return, curr: BasicBlock) -> BasicBlock:
-        if_exp: ast.IfExp = stmt.value
-        self._record_decision("if_exp", 1)
-
-        test_block = self._create_block(block_type="branch_header", label=f"if {ast.unparse(if_exp.test)}", lineno=stmt.lineno)
-        test_block.statements.append(if_exp.test)
-        self._add_edge(curr.block_id, test_block.block_id, edge_type="fallthrough")
-
-        true_block = self._create_block(block_type="return_block", label=f"return {ast.unparse(if_exp.body)}")
-        true_block.statements.append(ast.Return(value=if_exp.body))
-        true_block.terminator_type = "return"
-
-        false_block = self._create_block(block_type="return_block", label=f"return {ast.unparse(if_exp.orelse)}")
-        false_block.statements.append(ast.Return(value=if_exp.orelse))
-        false_block.terminator_type = "return"
-
-        self._add_edge(test_block.block_id, true_block.block_id, edge_type="branch_true", label="True")
-        self._add_edge(test_block.block_id, false_block.block_id, edge_type="branch_false", label="False")
-        self._add_edge(true_block.block_id, self.exit_id, edge_type="return", label="return")
-        self._add_edge(false_block.block_id, self.exit_id, edge_type="return", label="return")
-
-        curr.terminator_type = "return"
-        return curr
-
-    def _handle_bool_op_assign(self, stmt: ast.Assign, curr: BasicBlock) -> BasicBlock:
-        bool_op: ast.BoolOp = stmt.value
-        op_count = len(bool_op.values) - 1
-        op_name = "and" if isinstance(bool_op.op, ast.And) else "or"
-        self._record_decision(op_name, op_count)
-
-        join_block = self._create_block(block_type="basic_block", label="Join")
-        eval_blocks: List[BasicBlock] = []
-
-        for val in bool_op.values:
-            eb = self._create_block(block_type="basic_block", label=f"eval {ast.unparse(val)}")
-            eb.statements.append(ast.Assign(targets=stmt.targets, value=val))
-            eval_blocks.append(eb)
-
-        self._add_edge(curr.block_id, eval_blocks[0].block_id, edge_type="fallthrough")
-
-        if isinstance(bool_op.op, ast.And):
-            for i, eb in enumerate(eval_blocks):
-                if i < len(eval_blocks) - 1:
-                    self._add_edge(eb.block_id, eval_blocks[i + 1].block_id, edge_type="branch_true", label="True")
-                    self._add_edge(eb.block_id, join_block.block_id, edge_type="branch_false", label="False")
-                else:
-                    self._add_edge(eb.block_id, join_block.block_id, edge_type="fallthrough")
-        else:
-            for i, eb in enumerate(eval_blocks):
-                if i < len(eval_blocks) - 1:
-                    self._add_edge(eb.block_id, join_block.block_id, edge_type="branch_true", label="True")
-                    self._add_edge(eb.block_id, eval_blocks[i + 1].block_id, edge_type="branch_false", label="False")
-                else:
-                    self._add_edge(eb.block_id, join_block.block_id, edge_type="fallthrough")
-
-        return join_block
-
-    def _handle_bool_op_return(self, stmt: ast.Return, curr: BasicBlock) -> BasicBlock:
-        bool_op: ast.BoolOp = stmt.value
-        op_count = len(bool_op.values) - 1
-        op_name = "and" if isinstance(bool_op.op, ast.And) else "or"
-        self._record_decision(op_name, op_count)
-
-        eval_blocks: List[BasicBlock] = []
-        for val in bool_op.values:
-            eb = self._create_block(block_type="return_block", label=f"return {ast.unparse(val)}")
-            eb.statements.append(ast.Return(value=val))
-            eb.terminator_type = "return"
-            eval_blocks.append(eb)
-
-        self._add_edge(curr.block_id, eval_blocks[0].block_id, edge_type="fallthrough")
-
-        if isinstance(bool_op.op, ast.And):
-            for i, eb in enumerate(eval_blocks):
-                if i < len(eval_blocks) - 1:
-                    self._add_edge(eb.block_id, eval_blocks[i + 1].block_id, edge_type="branch_true", label="True")
-                    self._add_edge(eb.block_id, self.exit_id, edge_type="return", label="return")
-                else:
-                    self._add_edge(eb.block_id, self.exit_id, edge_type="return", label="return")
-        else:
-            for i, eb in enumerate(eval_blocks):
-                if i < len(eval_blocks) - 1:
-                    self._add_edge(eb.block_id, self.exit_id, edge_type="return", label="return")
-                    self._add_edge(eb.block_id, eval_blocks[i + 1].block_id, edge_type="branch_false", label="False")
-                else:
-                    self._add_edge(eb.block_id, self.exit_id, edge_type="return", label="return")
-
-        curr.terminator_type = "return"
-        return curr
 
     def _validate_and_finalize(self):
         """Performs BFS reachability, validates invariants, and computes cyclomatic metrics."""
@@ -828,13 +808,16 @@ class CFGBuilder:
             self.cfg.cyclomatic_complexity = self.cfg.graph_cyclomatic
             self.cfg.cyclomatic_discrepancy = 0
             self.cfg.risk_rank = self._compute_risk_rank(self.cfg.cyclomatic_complexity)
+            self.cfg.is_provisional = False
         elif self.cfg.cyclomatic_status == "PARTIAL":
             self.cfg.cyclomatic_complexity = self.cfg.decision_cyclomatic
             self.cfg.cyclomatic_discrepancy = self.cfg.decision_cyclomatic - self.cfg.graph_cyclomatic
-            self.cfg.risk_rank = self._compute_risk_rank(self.cfg.decision_cyclomatic)
+            self.cfg.risk_rank = None  # Do not expose an unqualified risk rank in partial analysis
+            self.cfg.is_provisional = True
         else:
             self.cfg.cyclomatic_complexity = None
             self.cfg.risk_rank = None
+            self.cfg.is_provisional = False
 
     @staticmethod
     def _compute_risk_rank(score: int) -> Literal["A", "B", "C", "D", "E", "F"]:
@@ -849,6 +832,36 @@ class CFGBuilder:
         if score <= 40:
             return "E"
         return "F"
+
+    @staticmethod
+    def compute_project_summary(cfgs: Dict[str, ControlFlowGraph]) -> Dict[str, Any]:
+        """Aggregates metrics across standalone functions and methods, excluding modules and class bodies.
+
+        If no functions/methods exist, falls back to module complexity if present, or 0.0.
+        """
+        procedural_cfgs = [
+            cfg for cfg in cfgs.values()
+            if cfg.scope_type in ("function", "method", "async_function")
+        ]
+        if not procedural_cfgs:
+            mod_cfg = cfgs.get("<module>")
+            avg_cc = float(mod_cfg.cyclomatic_complexity or 0.0) if mod_cfg else 0.0
+            return {
+                "average_cyclomatic_complexity": avg_cc,
+                "function_count": 0,
+                "total_scopes": len(cfgs),
+            }
+
+        valid_scores = [
+            cfg.cyclomatic_complexity for cfg in procedural_cfgs
+            if cfg.cyclomatic_complexity is not None
+        ]
+        avg_cc = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+        return {
+            "average_cyclomatic_complexity": round(avg_cc, 2),
+            "function_count": len(procedural_cfgs),
+            "total_scopes": len(cfgs),
+        }
 
     @classmethod
     def build_all(cls, tree: ast.AST) -> Dict[str, ControlFlowGraph]:

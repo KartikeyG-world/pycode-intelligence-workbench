@@ -175,3 +175,45 @@ class Calculator:
         sub_cfg = cfgs["Calculator.sub@8"]
         assert sub_cfg.scope_type in ("method", "function")
         assert sub_cfg.cyclomatic_complexity == 1
+
+    def test_serialization_has_provisional_flag(self):
+        code = "def f(): return 42"
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@1"]
+        d = cfg.to_dict()
+
+        assert "is_provisional" in d
+        assert d["is_provisional"] is False
+
+    def test_project_summary_aggregation(self):
+        code = """
+class Calculator:
+    base_val = 100
+
+    def add(self, x):
+        if x > 0:
+            return x + self.base_val
+        return self.base_val
+
+    def sub(self, x):
+        return x - self.base_val
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        summary = CFGBuilder.compute_project_summary(cfgs)
+
+        # Calculator.add: CC=2, Calculator.sub: CC=1 -> avg = (2 + 1) / 2 = 1.5
+        # Excludes module and class_body:Calculator@2 from denominator
+        assert summary["function_count"] == 2
+        assert summary["average_cyclomatic_complexity"] == 1.5
+        assert summary["total_scopes"] >= 4  # module, class_body, add, sub
+
+    def test_empty_function_population_summary(self):
+        code = "a = 1; b = 2; c = a + b"
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        summary = CFGBuilder.compute_project_summary(cfgs)
+
+        assert summary["function_count"] == 0
+        assert summary["average_cyclomatic_complexity"] == 1.0

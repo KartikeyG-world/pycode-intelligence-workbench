@@ -10,6 +10,7 @@ from app.analyzers.complexity_classes import ComplexityClass
 from app.analyzers.function_index import FunctionIndex
 from app.analyzers.call_graph import CallGraph
 from app.analyzers.cost_composer import CostComposer, FunctionCost
+from app.analyzers.metrics_pipeline import UnifiedMetricsPipeline
 from app.schemas.analysis import (
     AnalyzeResponse,
     CodeStatistics,
@@ -28,8 +29,12 @@ class ComplexityAnalyzer:
         self.recursion_analyzer = RecursionAnalyzer()
         self.operation_analyzer = OperationAnalyzer()
         self.structure_analyzer = StructureAnalyzer()
+        self.metrics_pipeline = UnifiedMetricsPipeline()
 
     def analyze(self, tree: ast.AST) -> AnalyzeResponse:
+        # 0. Execute unified Phase 1B.2 static metrics pipeline
+        scope_metrics, project_metrics = self.metrics_pipeline.run(tree)
+
         # 1. Index functions and construct interprocedural call graph
         function_index = FunctionIndex.from_ast(tree)
         call_graph = CallGraph(function_index)
@@ -177,6 +182,8 @@ class ComplexityAnalyzer:
             unsupported_patterns=[],
             limitations=chosen_cost.limitations,
             call_graph=call_graph.to_dict(),
+            scope_metrics=scope_metrics,
+            project_metrics=project_metrics,
         )
 
     def _compute_complexities(

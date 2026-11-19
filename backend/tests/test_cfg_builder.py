@@ -216,4 +216,27 @@ class Calculator:
         summary = CFGBuilder.compute_project_summary(cfgs)
 
         assert summary["function_count"] == 0
-        assert summary["average_cyclomatic_complexity"] == 1.0
+        assert summary["average_cyclomatic_complexity"] is None
+        assert summary["provisional_average_cyclomatic_complexity"] is None
+        assert summary["complete_function_count"] == 0
+        assert summary["partial_function_count"] == 0
+
+    def test_project_summary_provisional_segregation(self):
+        code = """
+def normal_fn(x):
+    if x > 0:
+        return x
+    return 0
+
+def partial_fn(nums):
+    return [x for x in nums if x > 0]
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        summary = CFGBuilder.compute_project_summary(cfgs)
+
+        assert summary["function_count"] == 2
+        assert summary["complete_function_count"] == 1
+        assert summary["partial_function_count"] == 1
+        assert summary["average_cyclomatic_complexity"] == 2.0  # normal_fn only
+        assert summary["provisional_average_cyclomatic_complexity"] == 3.0  # partial_fn only

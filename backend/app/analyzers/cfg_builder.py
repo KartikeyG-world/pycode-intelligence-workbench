@@ -33,17 +33,9 @@ CFGEdgeType = Literal[
 ]
 
 
-class _ASTMarkerReplacer(ast.NodeTransformer):
-    """Replaces marked AST sub-expressions with replacement AST nodes."""
-
-    def __init__(self, marker: str, replacement: ast.AST):
-        self.marker = marker
-        self.replacement = replacement
-
-    def visit(self, node: ast.AST):
-        if getattr(node, self.marker, False):
-            return copy.deepcopy(self.replacement)
-        return self.generic_visit(node)
+def _is_atomic(node: ast.AST) -> bool:
+    """Returns True if the AST node is an atomic literal or variable reference without side-effects."""
+    return isinstance(node, (ast.Name, ast.Constant))
 
 
 class BasicBlock:
@@ -242,6 +234,7 @@ class CFGBuilder:
         self.try_stack: List[_TryContext] = []
         self.decision_points: Dict[str, int] = {}
         self.limitations: List[str] = []
+        self.expr_temp_counter = 0
 
     def _create_block(
         self,
@@ -287,7 +280,8 @@ class CFGBuilder:
     def _add_limitation(self, limitation: str):
         if limitation not in self.limitations:
             self.limitations.append(limitation)
-        self.cfg.cyclomatic_status = "PARTIAL"
+        if self.cfg.cyclomatic_status != "UNSUPPORTED":
+            self.cfg.cyclomatic_status = "PARTIAL"
 
     def mark_unsupported(self, reason: str):
         """Marks the scope cyclomatic status as UNSUPPORTED and records the diagnostic limitation."""
@@ -295,48 +289,173 @@ class CFGBuilder:
         if reason not in self.limitations:
             self.limitations.append(reason)
 
-    @staticmethod
-    def _find_first_branching_expr(node: ast.AST) -> Optional[ast.AST]:
-        """Finds the first IfExp or BoolOp in an AST node, excluding comprehensions and lambdas."""
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)):
-                continue
-            if isinstance(child, (ast.IfExp, ast.BoolOp)):
-                return child
-            res = CFGBuilder._find_first_branching_expr(child)
-            if res is not None:
-                return res
-        return None
+    def _next_expr_temp(self) -> str:
+        tid = f"_t{self.expr_temp_counter}"
+        self.expr_temp_counter += 1
+        return tid
 
-    @staticmethod
-    def _lower_branching_statement(stmt: ast.stmt) -> Optional[ast.If]:
-        """Lowers a statement containing embedded IfExp or BoolOp into structured if/else statement branches."""
-        target = CFGBuilder._find_first_branching_expr(stmt)
-        if target is None:
+    def _get_eval_children(self, node: ast.AST):
+        """Yields (child_node, setter_fn) for an AST expression node in Python's evaluation order."""
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)):
+            return
+
+        if isinstance(node, ast.Call):
+            yield (node.func, lambda v: setattr(node, 'func', v))
+            for i, arg in enumerate(node.args):
+                yield (arg, lambda v, idx=i: node.args.__setitem__(idx, v))
+            for kw in node.keywords:
+                yield (kw.value, lambda v, k=kw: setattr(k, 'value', v))
+
+        elif isinstance(node, ast.Subscript):
+            yield (node.value, lambda v: setattr(node, 'value', v))
+            yield (node.slice, lambda v: setattr(node, 'slice', v))
+
+        elif isinstance(node, ast.Attribute):
+            yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.BinOp):
+            yield (node.left, lambda v: setattr(node, 'left', v))
+            yield (node.right, lambda v: setattr(node, 'right', v))
+
+        elif isinstance(node, ast.UnaryOp):
+            yield (node.operand, lambda v: setattr(node, 'operand', v))
+
+        elif isinstance(node, ast.Compare):
+            yield (node.left, lambda v: setattr(node, 'left', v))
+            for i, comp in enumerate(node.comparators):
+                yield (comp, lambda v, idx=i: node.comparators.__setitem__(idx, v))
+
+        elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            for i, elt in enumerate(node.elts):
+                yield (elt, lambda v, idx=i: node.elts.__setitem__(idx, v))
+
+        elif isinstance(node, ast.Dict):
+            for i in range(len(node.keys)):
+                k = node.keys[i]
+                if k is not None:
+                    yield (k, lambda v, idx=i: node.keys.__setitem__(idx, v))
+                yield (node.values[i], lambda v, idx=i: node.values.__setitem__(idx, v))
+
+        elif isinstance(node, ast.IfExp):
+            yield (node.test, lambda v: setattr(node, 'test', v))
+
+        elif isinstance(node, ast.BoolOp):
+            yield (node.values[0], lambda v: node.values.__setitem__(0, v))
+
+        elif isinstance(node, ast.NamedExpr):
+            yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.Starred):
+            yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.Return):
+            if node.value is not None:
+                yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.Assign):
+            yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.AnnAssign):
+            if node.value is not None:
+                yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.AugAssign):
+            yield (node.target, lambda v: setattr(node, 'target', v))
+            yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.Expr):
+            yield (node.value, lambda v: setattr(node, 'value', v))
+
+        elif isinstance(node, ast.Assert):
+            yield (node.test, lambda v: setattr(node, 'test', v))
+            if node.msg is not None:
+                yield (node.msg, lambda v: setattr(node, 'msg', v))
+
+        elif isinstance(node, ast.If):
+            yield (node.test, lambda v: setattr(node, 'test', v))
+
+    def _contains_branch(self, node: ast.AST) -> bool:
+        """Checks if an AST node contains an embedded BoolOp or IfExp branch."""
+        for child in ast.walk(node):
+            if child is not node and isinstance(child, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)):
+                continue
+            if isinstance(child, (ast.BoolOp, ast.IfExp)):
+                return True
+        return False
+
+    def _extract_first_branch(self, stmt: ast.stmt):
+        """Walks stmt in Python evaluation order and extracts the first branching expression.
+
+        Hoists any non-atomic prefix expressions evaluated before the branch into pre-statements.
+        Replaces the branching expression with a temporary variable reference.
+        Returns (pre_stmts, branch_node, branch_temp, post_stmt) or None if no branch is present.
+        """
+        if not self._contains_branch(stmt):
             return None
-        target._mark_replace = True
-        if isinstance(target, ast.IfExp):
-            s_true = _ASTMarkerReplacer("_mark_replace", target.body).visit(copy.deepcopy(stmt))
-            s_false = _ASTMarkerReplacer("_mark_replace", target.orelse).visit(copy.deepcopy(stmt))
-            if_node = ast.If(test=target.test, body=[s_true], orelse=[s_false])
-            ast.copy_location(if_node, stmt)
-            if_node._decision_kind = "if_exp"
-            return if_node
-        elif isinstance(target, ast.BoolOp):
-            op_name = "and" if isinstance(target.op, ast.And) else "or"
-            first = target.values[0]
-            rest = target.values[1] if len(target.values) == 2 else ast.BoolOp(op=target.op, values=target.values[1:])
-            if isinstance(target.op, ast.And):
-                s_true = _ASTMarkerReplacer("_mark_replace", rest).visit(copy.deepcopy(stmt))
-                s_false = _ASTMarkerReplacer("_mark_replace", first).visit(copy.deepcopy(stmt))
-            else:
-                s_true = _ASTMarkerReplacer("_mark_replace", first).visit(copy.deepcopy(stmt))
-                s_false = _ASTMarkerReplacer("_mark_replace", rest).visit(copy.deepcopy(stmt))
-            if_node = ast.If(test=first, body=[s_true], orelse=[s_false])
-            ast.copy_location(if_node, stmt)
-            if_node._decision_kind = op_name
-            return if_node
-        return None
+
+        # Do not decompose top-level BoolOp in Assert (handled directly by _handle_assert)
+        if isinstance(stmt, ast.Assert) and isinstance(stmt.test, ast.BoolOp):
+            return None
+        # Also do not decompose top-level not(BoolOp) in Assert (handled directly by _handle_assert)
+        if (isinstance(stmt, ast.Assert) and isinstance(stmt.test, ast.UnaryOp)
+                and isinstance(stmt.test.op, ast.Not) and isinstance(stmt.test.operand, ast.BoolOp)):
+            return None
+        # Do not decompose top-level BoolOp or IfExp in If (handled directly by _handle_if)
+        if isinstance(stmt, ast.If) and isinstance(stmt.test, (ast.BoolOp, ast.IfExp)):
+            return None
+
+        pre_stmts: List[ast.stmt] = []
+        stmt_copy = copy.deepcopy(stmt)
+
+        def visit(node, setter):
+            if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)):
+                return None
+
+            if isinstance(node, ast.IfExp):
+                sub = visit(node.test, lambda v: setattr(node, 'test', v))
+                if sub is not None:
+                    return sub
+                b_temp = self._next_expr_temp()
+                temp_node = ast.Name(id=b_temp, ctx=ast.Load())
+                ast.copy_location(temp_node, node)
+                setter(temp_node)
+                return (node, b_temp)
+
+            if isinstance(node, ast.BoolOp):
+                sub = visit(node.values[0], lambda v: node.values.__setitem__(0, v))
+                if sub is not None:
+                    return sub
+                b_temp = self._next_expr_temp()
+                temp_node = ast.Name(id=b_temp, ctx=ast.Load())
+                ast.copy_location(temp_node, node)
+                setter(temp_node)
+                return (node, b_temp)
+
+            for child, child_setter in self._get_eval_children(node):
+                if self._contains_branch(child):
+                    return visit(child, child_setter)
+                else:
+                    if not _is_atomic(child) and not isinstance(child, (ast.Name, ast.Constant)):
+                        t_name = self._next_expr_temp()
+                        assign = ast.Assign(
+                            targets=[ast.Name(id=t_name, ctx=ast.Store())],
+                            value=copy.deepcopy(child),
+                        )
+                        ast.copy_location(assign, child)
+                        ast.fix_missing_locations(assign)
+                        pre_stmts.append(assign)
+                        t_ref = ast.Name(id=t_name, ctx=ast.Load())
+                        ast.copy_location(t_ref, child)
+                        child_setter(t_ref)
+
+            return None
+
+        branch_info = visit(stmt_copy, lambda v: None)
+        if branch_info is None:
+            return None
+
+        branch_node, branch_temp = branch_info
+        return pre_stmts, branch_node, branch_temp, stmt_copy
 
     def build_from_body(self, body: List[ast.stmt]) -> ControlFlowGraph:
         """Builds the CFG for the provided sequence of statements."""
@@ -379,16 +498,60 @@ class CFGBuilder:
                 curr.add_statement(stmt)
                 continue
 
-            elif isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Return, ast.Expr)):
-                lowered_if = self._lower_branching_statement(stmt)
-                if lowered_if is not None:
-                    curr = self._handle_if(lowered_if, curr)
-                    continue
-                if isinstance(stmt, ast.Return):
-                    curr = self._handle_return(stmt, curr)
-                else:
-                    self._inspect_statement_expressions(stmt)
-                    curr.add_statement(stmt)
+            # Check if this statement has an embedded branching expression requiring lowering
+            branch_info = self._extract_first_branch(stmt)
+            if branch_info is not None:
+                pre_stmts, branch_node, branch_temp, post_stmt = branch_info
+
+                # 1. Execute pre-statements in curr
+                for pre in pre_stmts:
+                    self._inspect_statement_expressions(pre)
+                    curr.add_statement(pre)
+
+                # 2. Lower branch_node
+                if isinstance(branch_node, ast.IfExp):
+                    assign_true = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(branch_node.body))
+                    assign_false = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(branch_node.orelse))
+                    ast.copy_location(assign_true, branch_node.body)
+                    ast.copy_location(assign_false, branch_node.orelse)
+                    ast.fix_missing_locations(assign_true)
+                    ast.fix_missing_locations(assign_false)
+
+                    if_node = ast.If(test=copy.deepcopy(branch_node.test), body=[assign_true], orelse=[assign_false])
+                    ast.copy_location(if_node, branch_node)
+                    if_node._decision_kind = "if_exp"
+
+                elif isinstance(branch_node, ast.BoolOp):
+                    first = branch_node.values[0]
+                    rest = branch_node.values[1] if len(branch_node.values) == 2 else ast.BoolOp(op=branch_node.op, values=branch_node.values[1:])
+                    assign_init = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(first))
+                    ast.copy_location(assign_init, first)
+                    ast.fix_missing_locations(assign_init)
+                    self._inspect_statement_expressions(assign_init)
+                    curr.add_statement(assign_init)
+
+                    if isinstance(branch_node.op, ast.And):
+                        assign_then = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(rest))
+                        ast.copy_location(assign_then, rest)
+                        ast.fix_missing_locations(assign_then)
+                        if_node = ast.If(test=ast.Name(id=branch_temp, ctx=ast.Load()), body=[assign_then], orelse=[])
+                        ast.copy_location(if_node, branch_node)
+                        if_node._decision_kind = "and"
+                    else:
+                        assign_else = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(rest))
+                        ast.copy_location(assign_else, rest)
+                        ast.fix_missing_locations(assign_else)
+                        if_node = ast.If(test=ast.Name(id=branch_temp, ctx=ast.Load()), body=[ast.Pass()], orelse=[assign_else])
+                        ast.copy_location(if_node, branch_node)
+                        if_node._decision_kind = "or"
+
+                join_block = self._handle_if(if_node, curr)
+                # Continue building remaining statements from join_block
+                return self._build_statements([post_stmt] + stmts[i+1:], current_block=join_block)
+
+            # Standard statement dispatch
+            if isinstance(stmt, ast.Return):
+                curr = self._handle_return(stmt, curr)
 
             elif isinstance(stmt, ast.Raise):
                 curr = self._handle_raise(stmt, curr)
@@ -674,6 +837,13 @@ class CFGBuilder:
                 false_target_id=raise_block.block_id,
             )
             self._add_edge(curr.block_id, entry_test.block_id, edge_type="fallthrough")
+        elif (isinstance(stmt.test, ast.UnaryOp) and isinstance(stmt.test.op, ast.Not) and isinstance(stmt.test.operand, ast.BoolOp)):
+            entry_test = self._build_boolean_expr(
+                expr=stmt.test.operand,
+                true_target_id=raise_block.block_id,
+                false_target_id=next_block.block_id,
+            )
+            self._add_edge(curr.block_id, entry_test.block_id, edge_type="fallthrough")
         elif isinstance(stmt.test, ast.IfExp):
             if_exp = stmt.test
             s_true = ast.Assert(test=if_exp.body, msg=stmt.msg)
@@ -816,6 +986,9 @@ class CFGBuilder:
             self.cfg.is_provisional = True
         else:
             self.cfg.cyclomatic_complexity = None
+            self.cfg.graph_cyclomatic = None
+            self.cfg.decision_cyclomatic = None
+            self.cfg.cyclomatic_discrepancy = None
             self.cfg.risk_rank = None
             self.cfg.is_provisional = False
 
@@ -837,29 +1010,44 @@ class CFGBuilder:
     def compute_project_summary(cfgs: Dict[str, ControlFlowGraph]) -> Dict[str, Any]:
         """Aggregates metrics across standalone functions and methods, excluding modules and class bodies.
 
-        If no functions/methods exist, falls back to module complexity if present, or 0.0.
+        Empty populations return None for average_cyclomatic_complexity and 0 for function_count.
+        Complete and provisional scores are segregated into distinct fields.
         """
         procedural_cfgs = [
             cfg for cfg in cfgs.values()
             if cfg.scope_type in ("function", "method", "async_function")
         ]
         if not procedural_cfgs:
-            mod_cfg = cfgs.get("<module>")
-            avg_cc = float(mod_cfg.cyclomatic_complexity or 0.0) if mod_cfg else 0.0
             return {
-                "average_cyclomatic_complexity": avg_cc,
+                "average_cyclomatic_complexity": None,
+                "provisional_average_cyclomatic_complexity": None,
                 "function_count": 0,
+                "complete_function_count": 0,
+                "partial_function_count": 0,
+                "unsupported_function_count": 0,
                 "total_scopes": len(cfgs),
             }
 
-        valid_scores = [
+        complete_scores = [
             cfg.cyclomatic_complexity for cfg in procedural_cfgs
-            if cfg.cyclomatic_complexity is not None
+            if cfg.cyclomatic_status == "COMPLETE" and cfg.cyclomatic_complexity is not None
         ]
-        avg_cc = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+        partial_scores = [
+            cfg.cyclomatic_complexity for cfg in procedural_cfgs
+            if cfg.cyclomatic_status == "PARTIAL" and cfg.cyclomatic_complexity is not None
+        ]
+        unsupported_count = sum(1 for cfg in procedural_cfgs if cfg.cyclomatic_status == "UNSUPPORTED")
+
+        avg_cc = round(sum(complete_scores) / len(complete_scores), 2) if complete_scores else None
+        prov_avg_cc = round(sum(partial_scores) / len(partial_scores), 2) if partial_scores else None
+
         return {
-            "average_cyclomatic_complexity": round(avg_cc, 2),
+            "average_cyclomatic_complexity": avg_cc,
+            "provisional_average_cyclomatic_complexity": prov_avg_cc,
             "function_count": len(procedural_cfgs),
+            "complete_function_count": len(complete_scores),
+            "partial_function_count": len(partial_scores),
+            "unsupported_function_count": unsupported_count,
             "total_scopes": len(cfgs),
         }
 
@@ -881,7 +1069,11 @@ class CFGBuilder:
             lineno=module_lineno,
             end_lineno=module_end_lineno,
         )
-        cfgs["<module>"] = mod_builder.build_from_body(getattr(tree, "body", []))
+        try:
+            cfgs["<module>"] = mod_builder.build_from_body(getattr(tree, "body", []))
+        except Exception as exc:
+            mod_builder.mark_unsupported(f"Module scope analysis failed: {exc}")
+            cfgs["<module>"] = mod_builder.cfg
 
         # 2. Procedural Scopes (functions, methods, generators, async functions)
         for func_id, func_info in index.functions.items():
@@ -896,7 +1088,11 @@ class CFGBuilder:
                 lineno=func_info.lineno,
                 end_lineno=func_info.end_lineno,
             )
-            cfgs[func_id] = f_builder.build_from_body(f_body)
+            try:
+                cfgs[func_id] = f_builder.build_from_body(f_body)
+            except Exception as exc:
+                f_builder.mark_unsupported(f"Scope analysis failed: {exc}")
+                cfgs[func_id] = f_builder.cfg
 
         # 3. Class Bodies (statements directly inside class definition, excluding methods)
         for node in ast.walk(tree):
@@ -913,6 +1109,10 @@ class CFGBuilder:
                     lineno=node.lineno,
                     end_lineno=getattr(node, "end_lineno", node.lineno),
                 )
-                cfgs[class_scope_id] = cb_builder.build_from_body(class_body_stmts)
+                try:
+                    cfgs[class_scope_id] = cb_builder.build_from_body(class_body_stmts)
+                except Exception as exc:
+                    cb_builder.mark_unsupported(f"Class body analysis failed: {exc}")
+                    cfgs[class_scope_id] = cb_builder.cfg
 
         return cfgs

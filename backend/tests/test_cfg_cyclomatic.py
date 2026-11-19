@@ -244,3 +244,31 @@ def try_finally_check(x):
         # Verify candidate dispatch edge exists
         edge_types = [e.edge_type for e in cfg.edges]
         assert "finally_cleanup" in edge_types or "raise" in edge_types
+
+    def test_unsupported_status_lifecycle_robustness(self):
+        builder = CFGBuilder(scope_id="unsupported_lifecycle@1", name="unsupported_lifecycle", scope_type="function")
+        builder.mark_unsupported("Explicit syntax limitation")
+        # Ensure _add_limitation does not overwrite UNSUPPORTED with PARTIAL
+        builder._add_limitation("Secondary minor limitation")
+        cfg = builder.build_from_body([])
+
+        assert cfg.cyclomatic_status == "UNSUPPORTED"
+        assert cfg.cyclomatic_complexity is None
+        assert cfg.graph_cyclomatic is None
+        assert cfg.decision_cyclomatic is None
+        assert cfg.cyclomatic_discrepancy is None
+        assert cfg.risk_rank is None
+        assert cfg.is_provisional is False
+
+        d = cfg.to_dict()
+        assert d["cyclomatic_status"] == "UNSUPPORTED"
+        assert d["cyclomatic_complexity"] is None
+        assert d["risk_rank"] is None
+        assert d["is_provisional"] is False
+
+        summary = CFGBuilder.compute_project_summary({cfg.scope_id: cfg})
+        assert summary["function_count"] == 1
+        assert summary["unsupported_function_count"] == 1
+        assert summary["complete_function_count"] == 0
+        assert summary["average_cyclomatic_complexity"] is None
+        assert summary["provisional_average_cyclomatic_complexity"] is None

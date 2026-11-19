@@ -440,3 +440,199 @@ def ternary_bool_cond(a, b, c, d):
         assert cfg.graph_cyclomatic == 3
         assert cfg.decision_cyclomatic == 3
         assert cfg.decision_points == {"if_exp": 1, "and": 1}
+
+    def test_eval_order_case_a_side_effecting_left_operand(self):
+        code = """
+def f():
+    return consume(next_value() and fallback())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"and": 1}
+
+    def test_eval_order_case_b_short_circuit_or(self):
+        code = """
+def f():
+    return consume(next_value() or fallback())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"or": 1}
+
+    def test_eval_order_case_c_earlier_call_arguments(self):
+        code = """
+def f():
+    return consume(prepare(), next_value() and fallback())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"and": 1}
+
+    def test_eval_order_case_d_later_call_arguments(self):
+        code = """
+def f():
+    return consume(next_value() and fallback(), finish())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"and": 1}
+
+    def test_eval_order_case_e_callable_expression(self):
+        code = """
+def f():
+    return make_callable()(next_value() and fallback())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"and": 1}
+
+    def test_eval_order_case_f_conditional_in_call_args(self):
+        code = """
+def f():
+    return make_callable()(prepare(), value if condition() else fallback(), finish())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 2
+        assert cfg.graph_cyclomatic == 2
+        assert cfg.decision_cyclomatic == 2
+        assert cfg.decision_points == {"if_exp": 1}
+
+    def test_eval_order_case_g_attribute_and_subscript_operands(self):
+        code = """
+def f_subscript(items):
+    return consume(items[next_index()] and fallback())
+
+def f_attr(obj):
+    return consume(obj.value and fallback())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+
+        cfg_sub = cfgs["f_subscript@2"]
+        assert cfg_sub.cyclomatic_status == "COMPLETE"
+        assert cfg_sub.cyclomatic_complexity == 2
+        assert cfg_sub.decision_points == {"and": 1}
+
+        cfg_attr = cfgs["f_attr@5"]
+        assert cfg_attr.cyclomatic_status == "COMPLETE"
+        assert cfg_attr.cyclomatic_complexity == 2
+        assert cfg_attr.decision_points == {"and": 1}
+
+    def test_eval_order_case_h_multiple_branching_args(self):
+        code = """
+def f():
+    return consume(first() and second(), third() or fourth())
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 3
+        assert cfg.graph_cyclomatic == 3
+        assert cfg.decision_cyclomatic == 3
+        assert cfg.decision_points == {"and": 1, "or": 1}
+
+    def test_nested_assertion_inverted_not_bool_op(self):
+        code = """
+def f_not_and(a, b):
+    assert not (a and b)
+
+def f_not_or(a, b):
+    assert not (a or b)
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+
+        cfg_and = cfgs["f_not_and@2"]
+        assert cfg_and.cyclomatic_status == "COMPLETE"
+        assert cfg_and.cyclomatic_complexity == 3
+        assert cfg_and.graph_cyclomatic == 3
+        assert cfg_and.decision_cyclomatic == 3
+        assert cfg_and.decision_points == {"assert": 1, "and": 1}
+
+        cfg_or = cfgs["f_not_or@5"]
+        assert cfg_or.cyclomatic_status == "COMPLETE"
+        assert cfg_or.cyclomatic_complexity == 3
+        assert cfg_or.graph_cyclomatic == 3
+        assert cfg_or.decision_cyclomatic == 3
+        assert cfg_or.decision_points == {"assert": 1, "or": 1}
+
+    def test_nested_assertion_call_bool_op(self):
+        code = """
+def f(a, b):
+    assert check(a and b)
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 3
+        assert cfg.graph_cyclomatic == 3
+        assert cfg.decision_cyclomatic == 3
+        assert cfg.decision_points == {"and": 1, "assert": 1}
+
+    def test_nested_assertion_bool_op_combination(self):
+        code = """
+def f(a, b, c):
+    assert a and (b or c)
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 4
+        assert cfg.graph_cyclomatic == 4
+        assert cfg.decision_cyclomatic == 4
+        assert cfg.decision_points == {"assert": 1, "and": 1, "or": 1}
+
+    def test_nested_assertion_compare_bool_op(self):
+        code = """
+def f(a, b):
+    assert (a or b) is True
+"""
+        tree = ast.parse(code)
+        cfgs = CFGBuilder.build_all(tree)
+        cfg = cfgs["f@2"]
+
+        assert cfg.cyclomatic_status == "COMPLETE"
+        assert cfg.cyclomatic_complexity == 3
+        assert cfg.graph_cyclomatic == 3
+        assert cfg.decision_cyclomatic == 3
+        assert cfg.decision_points == {"or": 1, "assert": 1}

@@ -38,6 +38,18 @@ def _is_atomic(node: ast.AST) -> bool:
     return isinstance(node, (ast.Name, ast.Constant))
 
 
+class InternalTempRef(ast.Name):
+    """Internal AST reference representing an already-evaluated temporary operand."""
+
+    def __init__(self, *args, temp_id: Optional[str] = None, **kwargs):
+        if temp_id is not None and "id" not in kwargs and not args:
+            kwargs["id"] = temp_id
+        if "ctx" not in kwargs and len(args) < 2:
+            kwargs["ctx"] = ast.Load()
+        super().__init__(*args, **kwargs)
+        self.is_synthetic = True
+
+
 class BasicBlock:
     """Represents a maximal sequence of straight-line AST statements without intervening control-flow transfers."""
 
@@ -72,25 +84,35 @@ class BasicBlock:
             if self.end_lineno is None or s_end_lineno > self.end_lineno:
                 self.end_lineno = s_end_lineno
 
-    def statement_snippets(self) -> List[str]:
+    @property
+    def statement_count(self) -> int:
+        """Returns the count of user-authored statements in this basic block (excluding synthetic analysis temps)."""
+        return sum(1 for s in self.statements if isinstance(s, ast.stmt) and not getattr(s, "is_synthetic", False))
+
+    def statement_snippets(self, include_synthetic: bool = False) -> List[str]:
         snippets: List[str] = []
         for s in self.statements:
+            if not include_synthetic and getattr(s, "is_synthetic", False):
+                continue
+            target = getattr(s, "_original_expr", getattr(s, "_original_stmt", s))
             try:
-                code = ast.unparse(s)
+                code = ast.unparse(target)
                 if len(code) > 60:
                     code = code[:57] + "..."
                 snippets.append(code)
             except Exception:
-                snippets.append(type(s).__name__)
+                snippets.append(type(target).__name__)
         return snippets
 
     def to_dict(self) -> Dict[str, Any]:
+        snippets = self.statement_snippets()
         return {
             "id": self.block_id,
             "scope_id": self.scope_id,
             "block_type": self.block_type,
-            "label": self.label or (self.statement_snippets()[0] if self.statement_snippets() else self.block_type),
-            "statements": self.statement_snippets(),
+            "label": self.label or (snippets[0] if snippets else self.block_type),
+            "statements": snippets,
+            "statement_count": self.statement_count,
             "lineno": self.lineno,
             "end_lineno": self.end_lineno,
             "is_unreachable": self.is_unreachable,
@@ -235,6 +257,29 @@ class CFGBuilder:
         self.decision_points: Dict[str, int] = {}
         self.limitations: List[str] = []
         self.expr_temp_counter = 0
+        self.scope_names: Set[str] = set()
+
+    def _collect_scope_names(self, body: List[ast.stmt]) -> Set[str]:
+        names: Set[str] = set()
+        for stmt in body:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Name):
+                    names.add(node.id)
+                elif isinstance(node, ast.arg):
+                    names.add(node.arg)
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names.add(node.name)
+                elif isinstance(node, ast.ExceptHandler) and node.name:
+                    names.add(node.name)
+                elif isinstance(node, ast.alias):
+                    names.add(node.asname or node.name)
+                elif hasattr(ast, "MatchAs") and isinstance(node, ast.MatchAs) and node.name:
+                    names.add(node.name)
+                elif hasattr(ast, "MatchStar") and isinstance(node, ast.MatchStar) and node.name:
+                    names.add(node.name)
+                elif hasattr(ast, "MatchMapping") and isinstance(node, ast.MatchMapping) and node.rest:
+                    names.add(node.rest)
+        return names
 
     def _create_block(
         self,
@@ -290,9 +335,12 @@ class CFGBuilder:
             self.limitations.append(reason)
 
     def _next_expr_temp(self) -> str:
-        tid = f"_t{self.expr_temp_counter}"
-        self.expr_temp_counter += 1
-        return tid
+        while True:
+            tid = f"__cfg_tmp_{self.expr_temp_counter}__"
+            self.expr_temp_counter += 1
+            if tid not in self.scope_names:
+                self.scope_names.add(tid)
+                return tid
 
     def _get_eval_children(self, node: ast.AST):
         """Yields (child_node, setter_fn) for an AST expression node in Python's evaluation order."""
@@ -406,6 +454,8 @@ class CFGBuilder:
 
         pre_stmts: List[ast.stmt] = []
         stmt_copy = copy.deepcopy(stmt)
+        # Preserve original statement reference for snippet unparsing
+        stmt_copy._original_stmt = getattr(stmt, "_original_stmt", stmt)
 
         def visit(node, setter):
             if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)):
@@ -416,7 +466,7 @@ class CFGBuilder:
                 if sub is not None:
                     return sub
                 b_temp = self._next_expr_temp()
-                temp_node = ast.Name(id=b_temp, ctx=ast.Load())
+                temp_node = InternalTempRef(temp_id=b_temp)
                 ast.copy_location(temp_node, node)
                 setter(temp_node)
                 return (node, b_temp)
@@ -426,7 +476,7 @@ class CFGBuilder:
                 if sub is not None:
                     return sub
                 b_temp = self._next_expr_temp()
-                temp_node = ast.Name(id=b_temp, ctx=ast.Load())
+                temp_node = InternalTempRef(temp_id=b_temp)
                 ast.copy_location(temp_node, node)
                 setter(temp_node)
                 return (node, b_temp)
@@ -441,10 +491,11 @@ class CFGBuilder:
                             targets=[ast.Name(id=t_name, ctx=ast.Store())],
                             value=copy.deepcopy(child),
                         )
+                        assign.is_synthetic = True
                         ast.copy_location(assign, child)
                         ast.fix_missing_locations(assign)
                         pre_stmts.append(assign)
-                        t_ref = ast.Name(id=t_name, ctx=ast.Load())
+                        t_ref = InternalTempRef(temp_id=t_name)
                         ast.copy_location(t_ref, child)
                         child_setter(t_ref)
 
@@ -459,6 +510,7 @@ class CFGBuilder:
 
     def build_from_body(self, body: List[ast.stmt]) -> ControlFlowGraph:
         """Builds the CFG for the provided sequence of statements."""
+        self.scope_names = self._collect_scope_names(body)
         if not body:
             # Empty scope: Entry -> Exit
             self._add_edge(self.entry_id, self.exit_id, edge_type="fallthrough")
@@ -512,6 +564,8 @@ class CFGBuilder:
                 if isinstance(branch_node, ast.IfExp):
                     assign_true = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(branch_node.body))
                     assign_false = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(branch_node.orelse))
+                    assign_true.is_synthetic = True
+                    assign_false.is_synthetic = True
                     ast.copy_location(assign_true, branch_node.body)
                     ast.copy_location(assign_false, branch_node.orelse)
                     ast.fix_missing_locations(assign_true)
@@ -525,6 +579,7 @@ class CFGBuilder:
                     first = branch_node.values[0]
                     rest = branch_node.values[1] if len(branch_node.values) == 2 else ast.BoolOp(op=branch_node.op, values=branch_node.values[1:])
                     assign_init = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(first))
+                    assign_init.is_synthetic = True
                     ast.copy_location(assign_init, first)
                     ast.fix_missing_locations(assign_init)
                     self._inspect_statement_expressions(assign_init)
@@ -532,6 +587,7 @@ class CFGBuilder:
 
                     if isinstance(branch_node.op, ast.And):
                         assign_then = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(rest))
+                        assign_then.is_synthetic = True
                         ast.copy_location(assign_then, rest)
                         ast.fix_missing_locations(assign_then)
                         if_node = ast.If(test=ast.Name(id=branch_temp, ctx=ast.Load()), body=[assign_then], orelse=[])
@@ -539,11 +595,15 @@ class CFGBuilder:
                         if_node._decision_kind = "and"
                     else:
                         assign_else = ast.Assign(targets=[ast.Name(id=branch_temp, ctx=ast.Store())], value=copy.deepcopy(rest))
+                        assign_else.is_synthetic = True
                         ast.copy_location(assign_else, rest)
                         ast.fix_missing_locations(assign_else)
                         if_node = ast.If(test=ast.Name(id=branch_temp, ctx=ast.Load()), body=[ast.Pass()], orelse=[assign_else])
                         ast.copy_location(if_node, branch_node)
                         if_node._decision_kind = "or"
+
+                    if_node._condition_label = ast.unparse(first)
+                    if_node._condition_expr = first
 
                 join_block = self._handle_if(if_node, curr)
                 # Continue building remaining statements from join_block
@@ -673,15 +733,19 @@ class CFGBuilder:
         else:
             self._inspect_statement_expressions(stmt)
             label_prefix = "if_exp" if decision_kind == "if_exp" else ("test" if decision_kind in ("and", "or") else "if")
+            cond_expr = getattr(stmt, "_condition_expr", stmt.test)
+            cond_label = getattr(stmt, "_condition_label", None) or ast.unparse(cond_expr)
             if not curr.statements and curr.block_type == "basic_block":
                 header_block = curr
                 header_block.block_type = "branch_header"
-                header_block.label = f"{label_prefix} {ast.unparse(stmt.test)}"
+                header_block.label = f"{label_prefix} {cond_label}"
                 header_block.lineno = stmt.lineno
             else:
-                header_block = self._create_block(block_type="branch_header", label=f"{label_prefix} {ast.unparse(stmt.test)}", lineno=stmt.lineno)
+                header_block = self._create_block(block_type="branch_header", label=f"{label_prefix} {cond_label}", lineno=stmt.lineno)
                 self._add_edge(curr.block_id, header_block.block_id, edge_type="fallthrough")
-            header_block.statements.append(stmt.test)
+            test_stmt = copy.deepcopy(stmt.test)
+            test_stmt._original_expr = cond_expr
+            header_block.statements.append(test_stmt)
 
             else_start = self._create_block(block_type="basic_block", label="Else") if has_else else None
 
@@ -1015,7 +1079,7 @@ class CFGBuilder:
         """
         procedural_cfgs = [
             cfg for cfg in cfgs.values()
-            if cfg.scope_type in ("function", "method", "async_function")
+            if cfg.scope_type in ("function", "method")
         ]
         if not procedural_cfgs:
             return {
@@ -1069,11 +1133,7 @@ class CFGBuilder:
             lineno=module_lineno,
             end_lineno=module_end_lineno,
         )
-        try:
-            cfgs["<module>"] = mod_builder.build_from_body(getattr(tree, "body", []))
-        except Exception as exc:
-            mod_builder.mark_unsupported(f"Module scope analysis failed: {exc}")
-            cfgs["<module>"] = mod_builder.cfg
+        cfgs["<module>"] = mod_builder.build_from_body(getattr(tree, "body", []))
 
         # 2. Procedural Scopes (functions, methods, generators, async functions)
         for func_id, func_info in index.functions.items():
@@ -1081,18 +1141,19 @@ class CFGBuilder:
                 continue
             f_node = func_info.node
             f_body = getattr(f_node, "body", [])
+            is_method = bool(
+                (func_info.parent_scope_id and func_info.parent_scope_id.startswith("class:"))
+                or func_info.func_type in ("method", "static_method", "class_method", "property")
+            )
+            cfg_scope_type = "method" if is_method else "function"
             f_builder = cls(
                 scope_id=func_id,
                 name=func_info.name,
-                scope_type=func_info.func_type,
+                scope_type=cfg_scope_type,
                 lineno=func_info.lineno,
                 end_lineno=func_info.end_lineno,
             )
-            try:
-                cfgs[func_id] = f_builder.build_from_body(f_body)
-            except Exception as exc:
-                f_builder.mark_unsupported(f"Scope analysis failed: {exc}")
-                cfgs[func_id] = f_builder.cfg
+            cfgs[func_id] = f_builder.build_from_body(f_body)
 
         # 3. Class Bodies (statements directly inside class definition, excluding methods)
         for node in ast.walk(tree):
@@ -1109,10 +1170,6 @@ class CFGBuilder:
                     lineno=node.lineno,
                     end_lineno=getattr(node, "end_lineno", node.lineno),
                 )
-                try:
-                    cfgs[class_scope_id] = cb_builder.build_from_body(class_body_stmts)
-                except Exception as exc:
-                    cb_builder.mark_unsupported(f"Class body analysis failed: {exc}")
-                    cfgs[class_scope_id] = cb_builder.cfg
+                cfgs[class_scope_id] = cb_builder.build_from_body(class_body_stmts)
 
         return cfgs

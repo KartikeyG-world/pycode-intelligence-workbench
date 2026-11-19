@@ -2,6 +2,8 @@ from collections.abc import Mapping
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.metrics import UnifiedScopeMetrics, ProjectMetricsSummary
+
 
 class AnalyzeRequest(BaseModel):
     code: str = Field(..., min_length=1, description="Python source code to analyze")
@@ -152,6 +154,8 @@ class AnalyzeResponse(BaseModel):
     call_graph: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[SyntaxErrorInfo] = None
     submission_id: Optional[str] = None
+    scope_metrics: List[UnifiedScopeMetrics] = Field(default_factory=list)
+    project_metrics: Optional[ProjectMetricsSummary] = None
 
     @model_validator(mode="after")
     def validate_legacy_and_status_invariants(self) -> "AnalyzeResponse":

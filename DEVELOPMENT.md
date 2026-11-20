@@ -1,201 +1,178 @@
 # Development and Operations Guide
 
-This guide provides instructions for setting up, verifying, testing, and running both the Python FastAPI backend and Next.js frontend of the Python Code Intelligence & Performance Workbench.
+This guide describes the repository's backend and frontend development workflow. Commands are written for PowerShell where Windows-specific paths are relevant. Verify the active branch and dependency lockfiles before interpreting a test result as evidence for a particular release.
 
----
+## 1. Verified prerequisites
 
-## 1. Prerequisites
+| Tool | Repository requirement / source |
+|---|---|
+| Python | `>=3.11`, declared in `backend/pyproject.toml` |
+| Node.js | `>=20`, declared in `frontend/package.json` |
+| Python dependency manager | `uv` recommended; `backend/uv.lock` is checked in |
+| JavaScript package manager | npm; use `frontend/package-lock.json` via `npm ci` |
+| Git | Required for branch and commit workflows |
 
-Ensure the following runtimes and tools are installed on your system:
+The audit environment used Python 3.13.15. This records the environment observed during the audit; it does not narrow the package metadata requirement.
 
-- **Python**: 3.13.x (or 3.11+) 64-bit
-- **Node.js**: v20.x or v24.x
-- **Package Managers**:
-  - Python: `uv` (recommended, `pip install uv`) or standard `pip`
-  - Node.js: `npm` (v10+ or v11+)
-- **Git**: 2.40+
+## 2. Repository layout
 
----
-
-## 2. Environment Configuration
-
-Copy the root `.env.example` file to create your local `.env`:
-
-```bash
-cp .env.example .env
+```text
+.
+├── backend/
+│   ├── app/
+│   │   ├── analyzers/       # Parser and static analysis engines
+│   │   ├── api/routes/      # FastAPI route modules
+│   │   ├── core/            # Runtime configuration
+│   │   ├── db/              # SQLAlchemy engine/session setup
+│   │   ├── models/          # ORM models
+│   │   ├── schemas/         # Pydantic request/response contracts
+│   │   └── services/        # Analysis service orchestration
+│   ├── tests/               # Pytest suite
+│   ├── pyproject.toml
+│   ├── uv.lock
+│   └── requirements.txt
+├── frontend/
+│   ├── app/                 # Next.js App Router
+│   ├── components/          # UI components
+│   ├── lib/                 # API client and frontend utilities
+│   ├── types/               # TypeScript contracts
+│   └── package.json
+├── .env.example
+├── README.md
+└── DEVELOPMENT.md
 ```
 
-Default configuration values:
-- `PROJECT_NAME="Code Complexity Visualizer"`
-- `VERSION="1.0.0"`
-- `API_V1_PREFIX="/api"`
-- `DATABASE_URL="sqlite+pysqlite:///./complexity.db"` (Defaults to zero-configuration SQLite fallback)
-- `NEXT_PUBLIC_API_URL="http://127.0.0.1:8000"`
+## 3. Environment configuration
 
----
-
-## 3. Backend Setup & Testing (Python / FastAPI)
-
-The backend utilizes `uv` for reproducible, lockfile-backed dependency management.
-
-### Installation
-
-Navigate to `backend/` and synchronize the environment:
+The root `.env.example` contains the project's example configuration, including the API prefix, local SQLite URL and parser limits. The backend settings load `.env` relative to the backend process working directory. For a backend process started from `backend/`, create `backend/.env` from the root example:
 
 ```powershell
 cd backend
-
-# Using uv (recommended - syncs exact uv.lock):
-python -m uv sync --extra dev
-
-# Alternative standard pip installation:
-python -m pip install -r requirements.txt
+Copy-Item ..\.env.example .env
 ```
 
-### Running Tests
+The default database URL uses SQLite. PostgreSQL can be selected through `DATABASE_URL` using a SQLAlchemy URL supported by the configured Psycopg driver. Do not commit `.env` files, database passwords or service credentials.
 
-Execute the complete 36-test suite:
+The frontend requires its own runtime configuration only where the frontend API client expects it. Inspect the current frontend API client before introducing or documenting additional environment variables; do not invent variable names.
+
+## 4. Backend setup
+
+From the repository root:
 
 ```powershell
-# From the backend/ directory:
-.\.venv\Scripts\pytest tests/ -v
+cd backend
+uv sync --extra dev
 ```
 
-All 36 tests cover:
-- `tests/test_api.py` (5 API endpoint integration tests)
-- `tests/test_complexity_analyzer.py` (12 AST loop/recursion/memory unit tests)
-- `tests/test_recurrence_regression.py` (19 recurrence solver and metamorphic regression tests)
+This installs the project dependencies and development extra using the checked-in lockfile. If `uv` is not installed, install it using its official installation instructions before running the command.
 
-### Starting the Development Server
+Start FastAPI from the `backend/` directory:
 
 ```powershell
-# From the backend/ directory:
-.\.venv\Scripts\uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- API Documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- Health Check: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+Useful endpoints:
 
----
+- API root: `http://127.0.0.1:8000/`
+- OpenAPI UI: `http://127.0.0.1:8000/docs`
+- Analyze: `POST http://127.0.0.1:8000/api/analyze`
+- Health: `GET http://127.0.0.1:8000/api/health`
+- History: `GET http://127.0.0.1:8000/api/history`
 
-## 4. Frontend Setup & Build (Next.js 16 / React 19)
+The health route performs a database connectivity query. A healthy application process does not by itself establish that every analysis endpoint has been exercised successfully.
 
-### Installation
+## 5. Frontend setup
 
-Navigate to `frontend/` and install locked dependencies:
+From the repository root:
 
 ```powershell
 cd frontend
 npm ci
-```
-
-### Type Checking & Linting
-
-```powershell
-# TypeScript verification:
-npx tsc --noEmit
-
-# ESLint check:
-npm run lint
-```
-
-### Production Build
-
-On Windows systems, Next.js 16 Webpack mode is configured for `@xyflow/react` stylesheet evaluation:
-
-```powershell
-npm run build
-```
-
-### Starting the Development Server
-
-```powershell
 npm run dev
 ```
 
-The application interface is served at: [http://localhost:3000](http://localhost:3000).
+The frontend development server normally uses `http://localhost:3000`.
 
----
+Available repository scripts:
 
-## 5. Architectural Notes & Baseline Verification
+```powershell
+npm run lint
+npm run build
+npm run start
+```
 
-### SQLite Local Fallback
-When no Supabase PostgreSQL connection string is configured in `DATABASE_URL`, the application automatically falls back to SQLite (`./complexity.db`). The schema tables (`analysis_results`, `code_submissions`, `users`, `projects`) are verified on application startup via FastAPI's lifespan event.
+The production build script invokes Next.js with Webpack (`next build --webpack`). TypeScript checking is available directly:
 
-### Sandbox & Windows Loopback Socket Note
-On Windows systems, Python's `asyncio.ProactorEventLoop` uses a TCP loopback socket (`127.0.0.1`) for thread-to-event-loop notifications (`call_soon_threadsafe`). If executed in a sandboxed shell with network isolation, thread-based test clients like Starlette's `TestClient` require network loopback access (`BypassSandbox: true` or unsandboxed execution) to prevent socket permissions blocking (`WinError 10013`).
+```powershell
+npx tsc --noEmit
+```
 
----
+Run lint, typecheck and build as separate checks and report each result independently.
 
-## 6. Historical Algorithmic Deficiencies (Resolved in Phase 1A & Phase 1A.1)
+## 6. Backend tests
 
-The following deficiencies cataloged during Phase -1 were systematically resolved in Phase 1A and Phase 1A.1:
+From `backend/`:
 
-1. **Interprocedural Call Graph & Loop Composition**: Resolved via `FunctionIndex`, `CallGraph`, and `CostComposer`. Call sites inside loops multiply caller and callee asymptotic costs ($\mathcal{O}(f(n) \cdot g(n))$).
-2. **Multi-Function & Recursion Composition**: Resolved via Tarjan's SCC decomposition, bottom-up topological evaluation, and additive composition across independent procedures.
-3. **Local Type Inference**: Resolved via `LocalTypeInference`, preventing false string concatenation warnings on numeric and annotated variables.
-4. **Parser Boundaries & Semantic Execution Safety**: Enforced strict input byte/line limits (100 KB, 3,000 lines), iterative bounded AST traversal, container method cost models, and eager argument evaluation.
+```powershell
+uv run pytest tests/ -v
+```
 
----
+Run a focused module when iterating:
 
-## 7. Phase 1B Architectural Specification & Design Boundaries
+```powershell
+uv run pytest tests/test_complexity_analyzer.py -v
+uv run pytest tests/test_interprocedural.py -v
+uv run pytest tests/test_cfg_builder.py tests/test_cfg_control_flow.py tests/test_cfg_cyclomatic.py -v
+```
 
-As the engine advances to Control Flow Graph (CFG) analysis, Cyclomatic Complexity, and path-sensitive analysis in Phase 1B, the following architectural invariants and boundaries must be preserved:
+The published Unit 5 repository contains the following test modules:
 
-### A. Non-Exact Path Enumeration Boundary
-Control flow analysis must NOT claim or attempt to provide "exact path enumeration" for general Python programs. In the presence of arbitrary loops, recursion, dynamic dispatch, and input-dependent branch conditions, path feasibility and exhaustive execution path enumeration are undecidable (Rice's Theorem / Halting Problem). Instead, the CFG engine computes sound over-approximations, upper-bound path counts, branch condition coverage, and McCabe cyclomatic complexity $M = E - N + 2P$.
+- `test_api.py`
+- `test_cfg_builder.py`
+- `test_cfg_control_flow.py`
+- `test_cfg_cyclomatic.py`
+- `test_complexity_analyzer.py`
+- `test_correlation_engine.py`
+- `test_halstead_metrics.py`
+- `test_infra_socket_db_regression.py`
+- `test_interprocedural.py`
+- `test_metrics_schemas.py`
+- `test_phase1a12_final_verification.py`
+- `test_phase1a13_semantics_closure.py`
+- `test_phase1a1_correctness.py`
+- `test_project_metrics_summary.py`
+- `test_recurrence_regression.py`
+- `test_scope_discovery.py`
+- `test_structural_metrics.py`
 
-### B. Seven-Tier Architecture & Division of Responsibility
-The analysis pipeline adheres to a strict 7-tier layered hierarchy with unidirectional data flow:
+This list is a module inventory, not a claim that every test currently passes. Do not publish one aggregate pass count unless the complete suite has been rerun on the exact commit and the collected/passed/failed/skipped/deselected/error totals reconcile.
 
-1. **AST Layer (`SafeASTParser`)** — **[Implemented and tested]**: Enforces input size boundaries (100 KB / 3,000 lines), AST node limits (10,000 nodes, depth $\le 200$), and parses source into Python standard AST representations without code execution.
-2. **Function Index (`FunctionIndex`)** — **[Implemented and tested]**: Extracts lexical scopes, parameter lists, class/method definitions, decorators, and maps identifiers across scopes.
-3. **Call Graph (`CallGraph`)** — **[Implemented and tested]**: Identifies interprocedural call sites, argument classifications, Tarjan Strongly Connected Components (SCCs), and mutual/direct recursion cycles.
-4. **Control Flow Graph (`CFGBuilder`)** — **[Documented future capability — Phase 1B]**: Constructs basic blocks, control flow edges, entry/exit points, loop headers, and exception handling paths per function scope.
-5. **Recurrence Solver (`RecurrenceSolver` & `RecursionAnalyzer`)** — **[Implemented and tested]**: Solves homogeneous and inhomogeneous recurrence relations extracted from recursive calls.
-6. **Cyclomatic Analyzer (`CyclomaticAnalyzer`)** — **[Documented future capability — Phase 1B]**: Computes McCabe cyclomatic complexity, decision density, and branch counts directly from the CFG block structure.
-7. **Cost Composer (`CostComposer`)** — **[Implemented and tested]**: Synthesizes time complexity, auxiliary/retained space complexity, built-in operation costs, and emits the unified `AnalysisResult` contract.
+## 7. Test environment considerations
 
-### C. Radon as Development-Time Validation Oracle
-External cyclomatic complexity tools (e.g., `radon`) are restricted to development-time test harness oracles and validation baselines (`tests/`). They must NOT be imported, linked, or executed as runtime production dependencies in backend code. The production workbench relies exclusively on internal, verified AST/CFG traversal.
+The source audit reported that the Windows sandbox could not complete Starlette `TestClient` setup because loopback socket communication timed out. In that run, API tests errored before endpoint behavior could be verified; a socket-pair infrastructure regression test also timed out. These outcomes must remain distinct from analyzer unit-test results.
 
----
+When a test depends on local sockets, rerun it in a suitable environment that permits loopback networking. Capture the traceback and exact environment. Do not label an API test passed merely because the failure appears environmental, and do not infer a root cause from a timeout alone.
 
-## 8. Parser Security Boundaries and Residual Risk Disclosure
+## 8. Published architecture status
 
-The workbench implements defense-in-depth resource boundaries within `SafeASTParser`:
-- **Pre-parse Byte Limit**: Rejects inputs larger than 100,000 bytes (100 KB) before invoking the parser.
-- **Pre-parse Line Limit**: Rejects inputs with more than 3,000 lines.
-- **Post-parse Node Limit**: Strictly limits the AST to 10,000 nodes via iterative breadth-first/depth traversal.
-- **Post-parse Depth Limit**: Rejects AST hierarchies exceeding depth 200 via iterative stack tracking.
+The public `main` branch baseline documented here is Unit 5 (`84ae1574d567160dcb70f56d6ba745424607dcd9`). The CFG builder and Phase 1B.2 analyzer modules are present in the repository, but the Unit 5 `ComplexityAnalyzer` request path does not invoke the CFG builder or a unified metrics pipeline. The response schema contains `scope_metrics` and `project_metrics` fields, but the Unit 5 analyzer does not populate them.
 
-### Residual Parser-Stage Risks & Threat Model
-1. **Structural AST Parsing vs. Code Execution**:
-   `SafeASTParser` invokes Python's standard library `ast.parse()`, which constructs the structural AST representation without executing code. The workbench strictly prohibits compiling submitted source into executable bytecode (such as `compile(code, "<string>", "exec")`) and strictly prohibits dynamic execution (`eval()`, `exec()`, `subprocess`, or dynamic tracing).
-2. **Interpreter-Level Parser Stack Exhaustion**:
-   `SafeASTParser` utilizes an iterative (non-recursive) queue-based traversal to validate the AST *after* parsing, ensuring the workbench never exhausts Python's call stack during inspection. However, `ast.parse()` itself invokes CPython's internal C-level PEG parser. Pathological inputs with extreme syntactical nesting (e.g., thousands of nested parentheses or unary operators) can theoretically trigger C stack overflow or memory exhaustion within the C runtime before Python-level validation or exception handlers can execute (per official CPython documentation: https://docs.python.org/3.13/library/ast.html).
-3. **Recoverable vs. Non-Recoverable Parser Errors**:
-   The analyzer safely intercepts and returns structured `SyntaxErrorInfo` for recoverable Python exceptions: `SyntaxError`, `MemoryError`, `RecursionError`, and `ValueError`. It cannot intercept low-level OS segmentation faults or uncatchable C-stack overflow crashes from malicious C-level inputs.
-4. **Production Isolation Recommendation**:
-   For deployments accepting arbitrary, untrusted, or potentially hostile user code, AST parsing should execute inside an isolated ephemeral subprocess or sandboxed worker with strict OS-level CPU/memory `ulimits` (or containerized sandboxes). The current service guarantees AST inspection safety for all valid and standard syntactical forms under strict static-only execution.
+The local Unit 6 commit `64adf3d256f04ff43796b933875887b2f34d3179` is reported to add `metrics_pipeline.py` and integrate it with `ComplexityAnalyzer`. It is not part of the published GitHub baseline in this document. Update this section only after the exact commit is pushed, verified and merged or otherwise established as the repository's supported baseline.
 
----
+## 9. Static-analysis safety boundary
 
-## 9. Static Control Flow Graph vs. Dynamic Branch Coverage Invariants
+The parser uses Python's AST parser and does not execute submitted code. Current limits are 100,000 source bytes, 3,000 source lines, 10,000 AST nodes and AST depth 200. Node/depth checks are post-parse checks; they do not constrain parser-stage work before `ast.parse` returns. See `SECURITY.md` for residual-risk handling.
 
-As Control Flow Graph (CFG) analysis is introduced in Phase 1B, the distinction between static structural analysis and dynamic execution measurement must remain absolute:
+## 10. Verification report format
 
-### Static CFG Structural Capabilities — [Documented future capability — Phase 1B]
-Static CFG analysis analyzes the syntax tree without running the code to compute:
-- Basic block decomposition and possible control-flow edges.
-- Conditional branch points (`if`, `match`, ternary expressions, loop headers).
-- Structural reachability across the AST/CFG model.
-- Loop back-edges and loop nesting depth.
-- McCabe Cyclomatic Complexity ($M = E - N + 2P$).
-- Maximum decision density and theoretical independent execution path upper bounds.
+Every engineering report that cites test results should state:
 
-### Absolute Prohibition on Fabricated Dynamic Coverage
-- **Static Analysis Cannot Prove Dynamic Path Execution**: Static CFG analysis models all syntactically possible paths; it cannot determine which branches are actually taken by a specific set of runtime user inputs or test vectors (which requires dynamic execution evidence such as `coverage.py` branch tracing).
-- **Zero Execution Boundary**: Because this workbench maintains a strict static-only security boundary with zero code execution (`eval`, `exec`, `subprocess`, or dynamic tracing are prohibited), the workbench must **never** claim measured runtime branch coverage or report fabricated execution coverage percentages.
-- **Path Feasibility & Undecidability**: Due to the Halting Problem and Rice's Theorem, exact path feasibility in the presence of arbitrary loops, recursive state, and dynamic dispatch is undecidable. The workbench provides sound structural models, never false promises of exact runtime path execution.
+1. Branch name and full commit SHA.
+2. Python and Node versions where relevant.
+3. OS and execution environment, including whether network/socket access is restricted.
+4. Exact command(s).
+5. Tests collected, passed, failed, skipped, deselected and errored.
+6. Exit code and any environmental limitation.
 
+Frontend checks and backend checks must be reported independently. A clean TypeScript check does not establish a successful production build; analyzer unit tests do not establish successful HTTP transport.

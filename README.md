@@ -1,226 +1,148 @@
-# Code Complexity Visualizer
+# Python Code Intelligence & Performance Workbench
 
-A deterministic, production-grade web application for Python static code complexity analysis, AST structural flow visualization, and theoretical asymptotic growth modeling.
+A static-analysis workbench for inspecting Python program structure and reasoning about algorithmic complexity without executing submitted source code.
 
----
+> **Repository-state note (20 November 2026):** This documentation draft targets the published GitHub baseline `84ae1574d567160dcb70f56d6ba745424607dcd9` (Unit 5). The local Unit 6 commit `64adf3d256f04ff43796b933875887b2f34d3179` is not present on the GitHub remote yet. The Unit 6 unified metrics pipeline is therefore described as pending publication, not as part of the current public `main` branch.
 
-## Overview
+## What the workbench does
 
-**Code Complexity Visualizer** parses user-submitted Python code safely into an Abstract Syntax Tree (AST), statically inspects nested loops, recursive branches, container allocations, and operations, and derives:
-- **Time Complexity** (e.g., $\mathcal{O}(1)$, $\mathcal{O}(\log n)$, $\mathcal{O}(n)$, $\mathcal{O}(n \log n)$, $\mathcal{O}(n^2)$, $\mathcal{O}(n^3)$, $\mathcal{O}(2^n)$)
-- **Auxiliary Space Complexity** (e.g., $\mathcal{O}(1)$, $\mathcal{O}(\log n)$, $\mathcal{O}(n)$, $\mathcal{O}(n^2)$)
-- **Static Confidence Level** (`HIGH`, `MEDIUM`, `LOW`)
-- **Step-by-step Mathematical Reasoning**
-- **AST Control Flow & Hierarchy Graph** (rendered dynamically using React Flow)
-- **Theoretical Asymptotic Growth Curves** (rendered with Recharts)
-- **Rule-based Optimization Suggestions**
+The currently published application accepts Python source, parses it into an Abstract Syntax Tree (AST), and performs static analysis to produce algorithmic time/space complexity reasoning and a structured analysis response. Its Phase 1A analysis includes function indexing, interprocedural call relationships, recursion/recurrence reasoning, loop analysis, operation-cost models and asymptotic cost composition.
 
-> **Zero Mock Data & No Arbitrary Execution**: Analysis is generated strictly via Python AST static analysis without running user code (`eval`/`exec` are strictly forbidden).
+The repository also contains a Control Flow Graph (CFG) builder and Phase 1B.2 metric components. Their presence in the source tree must be distinguished from integration into the current HTTP analysis path; see [Current capability status](#current-capability-status) and the [Phase 1B metrics status note](docs/architecture/phase-1b-metrics.md).
 
----
+## Current capability status
 
-## System Architecture
+Status below is evaluated against the published Unit 5 commit identified above.
 
-```
-code-complexity/
-├── backend/
-│   ├── alembic/              # Database migration environments & revisions
-│   ├── alembic.ini           # Alembic migration configuration
-│   ├── app/
-│   │   ├── analyzers/        # Core static analysis engines
-│   │   │   ├── ast_parser.py          # Safe AST parsing & syntax error boundaries
-│   │   │   ├── loop_analyzer.py       # For/While loop nesting, step & halving
-│   │   │   ├── recursion_analyzer.py  # Branching factor, depth & Master theorem
-│   │   │   ├── operation_analyzer.py  # Allocations, container costs, pitfalls
-│   │   │   ├── structure_analyzer.py  # Graph nodes/edges & AST statistics
-│   │   │   └── complexity_analyzer.py # Asymptotic synthesis & Big-O derivation
-│   │   ├── api/
-│   │   │   └── routes/       # API endpoints (/analyze, /history, /health)
-│   │   ├── core/             # Configuration & environment variable settings
-│   │   ├── db/               # SQLAlchemy 2.x engine & session management
-│   │   ├── models/           # Relational models (User, Project, Submission, Result)
-│   │   ├── schemas/          # Pydantic v2 validation models
-│   │   ├── services/         # Analysis orchestration & DB persistence
-│   │   └── main.py           # FastAPI application entrypoint
-│   ├── tests/                # Pytest comprehensive test suite (17 tests)
-│   ├── conftest.py
-│   └── requirements.txt
-├── frontend/
-│   ├── app/                  # Next.js App Router (page.tsx, layout.tsx, globals.css)
-│   ├── components/           # UI components
-│   │   ├── CodeEditor.tsx         # Monaco Editor with hotkeys & presets
-│   │   ├── ComplexityOverview.tsx # Metric badges (Time, Space, Confidence)
-│   │   ├── StatisticsGrid.tsx     # Counters for loops, depth, functions, etc.
-│   │   ├── ComplexityChart.tsx    # Recharts comparative Big-O growth curves
-│   │   ├── StructureFlow.tsx      # React Flow interactive AST graph
-│   │   ├── ReasoningPanel.tsx     # Explanations & optimization hints
-│   │   ├── HistoryDrawer.tsx      # Past analysis browser & restore
-│   │   ├── ReportModal.tsx        # Exportable Markdown analysis report
-│   │   └── Navbar.tsx             # Header with live engine status indicator
-│   ├── lib/                  # API client & sample algorithm library
-│   ├── types/                # TypeScript type definitions
-│   └── package.json
-├── .env.example              # Environment variables template
-├── .gitignore
-└── README.md
+| Capability | Published status | Notes |
+|---|---|---|
+| Safe Python AST parsing | Implemented | Static parsing with source-size, line-count, AST-node and AST-depth limits. |
+| Phase 1A complexity analysis | Implemented / API-integrated | Function indexing, call graph, loops, recursion/recurrences, operation-cost analysis and cost composition. |
+| CFG construction and cyclomatic analysis | Implemented as backend modules | CFG implementation and tests are present; the current `ComplexityAnalyzer` HTTP path does not invoke the CFG builder. |
+| Phase 1B.2 schemas and analyzer modules | Present in backend source | Scope discovery, structural metrics, Halstead metrics, correlation and project-summary modules exist. |
+| Unified Phase 1B.2 metrics pipeline | Pending publication | The local Unit 6 commit adds `metrics_pipeline.py` and wires it into `ComplexityAnalyzer`; that commit is not on GitHub as of this snapshot. |
+| Phase 1B.2 frontend visualization | Not implemented | The current frontend types and components do not render the new metrics. |
+| Runtime profiling / benchmarking | Not implemented | The application does not execute submitted code or measure runtime performance. |
+| Automatic source optimization / rewriting | Not implemented | Suggestions are rule-based text; no semantics-preserving rewrite engine is present. |
+
+The published `AnalyzeResponse` schema includes `scope_metrics` and `project_metrics` fields. On the published Unit 5 baseline, the analyzer does not populate these fields; they retain their schema defaults (an empty scope list and a null project summary). Do not infer an integrated metrics API from schema-field presence alone.
+
+## Architecture at a glance
+
+```text
+Browser (Next.js / React)
+        |
+        | HTTP requests
+        v
+FastAPI routes (/api/analyze, /api/health, /api/history)
+        |
+        v
+AnalysisService
+        |
+        v
+SafeASTParser (ast.parse; no submitted-code execution)
+        |
+        v
+ComplexityAnalyzer (published Phase 1A request path)
+        |
+        +--> FunctionIndex / CallGraph / LoopAnalyzer
+        +--> RecursionAnalyzer / RecurrenceSolver
+        +--> OperationAnalyzer / CostComposer
+        +--> StructureAnalyzer
+        |
+        v
+AnalyzeResponse (Pydantic)
+        |
+        +--> optional persistence of the legacy analysis fields
 ```
 
----
+Additional CFG and Phase 1B.2 metric engines are available as backend modules, but the unified Unit 6 orchestration is pending publication at this baseline. Detailed ownership boundaries are in [System architecture](docs/architecture/system-overview.md).
 
-## Technology Stack
+## Technology stack
 
 ### Backend
-- **Language**: Python 3.14 / 3.11+
-- **API Framework**: FastAPI
-- **Data Validation**: Pydantic v2 & Pydantic-Settings
-- **ORM**: SQLAlchemy 2.x
-- **Database Migrations**: Alembic
-- **PostgreSQL Driver**: Psycopg 3 (`psycopg[binary]`)
-- **Server**: Uvicorn
-- **Testing**: Pytest & HTTPX
+
+- Python `>=3.11` (declared in `backend/pyproject.toml`)
+- FastAPI and Uvicorn
+- Pydantic v2 and pydantic-settings
+- SQLAlchemy 2.x and Alembic
+- Psycopg 3 for PostgreSQL connectivity
+- Pytest and HTTPX in the development extra
+- `uv` with the checked-in lockfile
 
 ### Frontend
-- **Framework**: Next.js 16 (App Router)
-- **Language**: TypeScript 5
-- **UI Library**: React 19
-- **Styling**: Tailwind CSS v4
-- **Code Editor**: Monaco Editor (`@monaco-editor/react`)
-- **Visual Graphs**: React Flow (`@xyflow/react`)
-- **Mathematical Charts**: Recharts
-- **Icons**: Lucide React
 
-### Database
-- **Primary / Production**: Supabase PostgreSQL (via `postgresql+psycopg://...`)
-- **Local Fallback**: SQLite (`sqlite+pysqlite:///./complexity.db`)
+- Node.js `>=20`
+- Next.js 16 and React 19
+- TypeScript 5 and Tailwind CSS v4
+- Monaco Editor, React Flow, Recharts and Lucide React
 
----
+### Persistence
 
-## Quickstart & Local Setup
+The backend defaults to SQLite when no database URL is supplied and supports PostgreSQL through the configured SQLAlchemy URL. The current persistence model stores the legacy analysis result fields; Phase 1B.2 metric persistence is not part of the accepted current contract.
 
-### 1. Prerequisites
-- Python 3.11+ (tested with Python 3.14)
-- Node.js 20+ (tested with Node.js v24)
-- npm 10+
+## Local development
 
-### 2. Backend Setup
+See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup and verification instructions.
 
-```bash
-# Navigate to backend directory
+### Backend
+
+```powershell
 cd backend
-
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-# macOS/Linux:
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run database migrations with Alembic
-alembic upgrade head
-
-# Start FastAPI server
-uvicorn app.main:app --reload --port 8000
+uv sync --extra dev
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
-Backend will be available at: `http://localhost:8000` (API documentation at `http://localhost:8000/docs`).
 
-### 3. Frontend Setup
+### Frontend
 
-```bash
-# In a new terminal, navigate to frontend directory
+```powershell
 cd frontend
-
-# Install dependencies
-npm install
-
-# Start Next.js development server
+npm ci
 npm run dev
 ```
-Frontend will be available at: `http://localhost:3000`.
 
----
+## HTTP API
 
-## Supabase PostgreSQL Configuration
+The FastAPI application mounts the following routes under `/api`:
 
-To connect the application to a hosted Supabase PostgreSQL instance:
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/analyze` | Analyze submitted Python source statically. |
+| `GET` | `/api/health` | Report service and database connectivity status. |
+| `GET` | `/api/history` | Retrieve recent persisted analysis records. |
+| `GET` | `/api/history/{submission_id}` | Retrieve a persisted analysis detail record. |
 
-1. Copy `.env.example` to `backend/.env`:
-   ```bash
-   cp .env.example backend/.env
-   ```
-2. Update `DATABASE_URL` with your Supabase connection string using the `psycopg` driver scheme:
-   ```env
-   DATABASE_URL=postgresql+psycopg://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres
-   ```
-3. Run Alembic migrations:
-   ```bash
-   cd backend
-   alembic upgrade head
-   ```
-4. Verify the database tables (`users`, `projects`, `code_submissions`, `analysis_results`) in your Supabase dashboard table editor.
+FastAPI's interactive API documentation is available at `/docs` when the backend is running. The endpoint contracts are defined by the route and Pydantic schema modules; do not treat live analysis responses and historical persistence responses as identical data models.
 
----
+## Static-analysis and security boundary
 
-## Static Complexity Rules & Detection Capabilities
+Submitted Python is parsed into AST data and analyzed without being executed. The parser enforces a 100,000-byte source limit, a 3,000-line limit, a 10,000-node AST limit and a depth limit of 200. The AST node/depth checks run after `ast.parse` has produced the tree; they do not eliminate all resource risks inside the interpreter's parsing stage. Deployments that accept hostile input should use process/container isolation and operating-system resource limits in addition to application-level checks.
 
-| Pattern | Detected Static Clues | Derived Complexity |
-| :--- | :--- | :--- |
-| **Sequential Operations** | No loops or recursion, scalar variables | $\mathcal{O}(1)$ Time, $\mathcal{O}(1)$ Space |
-| **Single Loop** | `for i in range(n)` or `for x in arr:` | $\mathcal{O}(n)$ Time, $\mathcal{O}(1)$ Space |
-| **Sequential Loops** | Independent loops at same level | $\mathcal{O}(n)$ Time (Additive $\max$) |
-| **Halving While Loop** | `while n > 1: n //= 2` or `n >>= 1` | $\mathcal{O}(\log n)$ Time, $\mathcal{O}(1)$ Space |
-| **Binary Search** | Pointer convergence `mid = (low+high)//2` | $\mathcal{O}(\log n)$ Time, $\mathcal{O}(1)$ Space |
-| **Nested Loops** | Two nested loops over input $n$ | $\mathcal{O}(n^2)$ Time |
-| **Multi-variable Loops**| Outer loop over $n$, inner loop over $m$ | $\mathcal{O}(n \times m)$ Time |
-| **Triple Nested Loops** | Three nested loops over input $n$ | $\mathcal{O}(n^3)$ Time |
-| **Linear Recursion** | Single self-call with linear decrement | $\mathcal{O}(n)$ Time, $\mathcal{O}(n)$ Stack Space |
-| **Branching Recursion**| Multiple self-calls per frame (e.g. Fibonacci)| $\mathcal{O}(2^n)$ Time, $\mathcal{O}(n)$ Stack Space |
-| **Divide-and-Conquer** | Halved subproblems + linear merge | $\mathcal{O}(n \log n)$ Time |
-| **Buffer Allocation** | `arr = [0] * n` | $\mathcal{O}(n)$ Auxiliary Space |
-| **Matrix Allocation** | `[[0] * n for _ in range(n)]` | $\mathcal{O}(n^2)$ Auxiliary Space |
+Static results are not runtime measurements. The workbench does not provide measured execution time, actual peak memory, dynamic branch coverage or proof that a statically represented path is feasible for a particular input.
 
----
+See [SECURITY.md](SECURITY.md) for the security boundary and disclosure guidance.
 
-## Running Automated Tests
+## Documentation map
 
-Run backend tests using Pytest:
+- [Development and operations](DEVELOPMENT.md)
+- [Contribution workflow](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Documentation index](docs/README.md)
+- [System architecture](docs/architecture/system-overview.md)
+- [Phase 1B metric contracts and integration status](docs/architecture/phase-1b-metrics.md)
+- [Test strategy and verification](docs/development/testing.md)
 
-```bash
-cd backend
-pytest -v
-```
+## Known documentation and integration gaps
 
-The test suite exercises:
-- $\mathcal{O}(1)$ scalar code
-- $\mathcal{O}(n)$ linear loops
-- $\mathcal{O}(n^2)$ quadratic nested loops
-- $\mathcal{O}(n^3)$ cubic nested loops
-- $\mathcal{O}(n) + \mathcal{O}(n) = \mathcal{O}(n)$ sequential loops
-- $\mathcal{O}(\log n)$ halving while loops
-- Binary search pointer updates
-- Linear & branching recursion ($\mathcal{O}(2^n)$)
-- Linear & matrix auxiliary space allocations
-- Graceful syntax error reporting (line, column, message)
-- FastAPI endpoints (`/api/health`, `/api/analyze`, `/api/history`)
+1. The runtime default `PROJECT_NAME` in `backend/app/core/config.py` and `.env.example` still uses the legacy name `Code Complexity Visualizer`; this is a configuration-alignment item, not a claim that the runtime title has already been changed.
+2. The Phase 1B.2 unified pipeline exists in a local Unit 6 commit but has not been published to GitHub at the snapshot recorded here.
+3. The frontend does not yet expose Phase 1B/1B.2 metrics.
+4. HTTP `TestClient` execution was blocked by loopback socket setup failures in the reported Windows sandbox. API transport verification must be repeated in an environment that supports the required local sockets.
+5. Test totals reported in the source audit did not reconcile arithmetically. This documentation intentionally does not publish an aggregate test count.
 
----
+## Repository baseline
 
-## Security & Reliability
-
-- **No Code Execution**: User code is strictly parsed by Python's `ast.parse` into AST data nodes. `exec` and `eval` are never called.
-- **Request Size Boundaries**: Enforces configurable maximum byte sizes (100KB) and line limits (3,000 lines) to prevent denial of service.
-- **Error Sandboxing**: Syntax and parsing errors are intercepted and returned as clean JSON responses without exposing internal server stack traces.
-- **Credential Hygiene**: Connection strings are retrieved from environment variables; `.env` is ignored by Git.
-
----
-
-## Complexity Analysis Limitations
-
-Static AST analysis operates on program syntax. In accordance with the Halting Problem and Rice's Theorem:
-1. Loops with data-dependent early exits (e.g. `break` on random inputs) are estimated according to their worst-case static bounds.
-2. Complex non-linear recurrences without recognizable divide-and-conquer structures are explicitly flagged with `MEDIUM` or `LOW` confidence.
-3. Dynamically generated code (`exec`, `eval`) cannot be analyzed statically.
+- Repository: `KartikeyG-world/pycode-intelligence-workbench`
+- Published branch baseline: `main` at `84ae1574d567160dcb70f56d6ba745424607dcd9`
+- Local Unit 6 checkpoint pending publication: `64adf3d256f04ff43796b933875887b2f34d3179`
+- Documentation snapshot date: 20 November 2026

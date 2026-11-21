@@ -126,10 +126,24 @@ See [SECURITY.md](SECURITY.md) for the security boundary and disclosure guidance
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for the complete license text.
 
+## Winter of Code Social (WOCS) 2026
+
+This project participates in **[Winter of Code Social (WOCS) 2026](https://woc.codesocial.tech/)**, an open-source mentorship initiative organised by Code Social.
+
+External contributors, student developers, and open-source participants are welcome to contribute! To ensure a smooth onboarding process:
+
+1. **Find Available Issues:** Browse open, unassigned tasks on the project's [GitHub Issues tracker](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues).
+2. **Review Contribution Standards:** Read the [CONTRIBUTING.md](CONTRIBUTING.md) guide for strict static-analysis invariants, branch naming conventions, and testing expectations.
+3. **Request Issue Assignment:** Leave a comment on the relevant issue expressing interest and outlining your proposed technical approach.
+4. **Wait for Formal Assignment:** **Do not begin work or submit a pull request until a Project Admin or Mentor explicitly assigns the issue to you.** Unassigned pull requests will be closed.
+5. **Follow the Code of Conduct:** All participants must abide by the project's [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) across all discussions and reviews.
+6. **Join Community Discussions:** Connect with maintainers and participants in the **[Code Social Discord Server](https://discord.gg/MSTNyRSPYW)**. (A dedicated project forum channel will be created and shared by the Project Admin).
+
 ## Documentation map
 
 - [Development and operations](DEVELOPMENT.md)
 - [Contribution workflow](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security policy](SECURITY.md)
 - [Project license](LICENSE)
 - [Documentation index](docs/README.md)

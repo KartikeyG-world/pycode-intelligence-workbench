@@ -1,0 +1,80 @@
+name: Bug Report
+description: Report a bug, unexpected complexity result, or crash in the analyzer or workbench
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide detailed information to help maintainers reproduce and diagnose the problem.
+
+        > **Important:** Do not submit private code, credentials, API keys, or secret tokens.
+        > Anyone wishing to work on a fix for this issue once confirmed must request and receive formal assignment from a maintainer before beginning implementation.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem Summary
+      description: Provide a clear and concise summary of the issue.
+      placeholder: e.g., Linear recurrence solver returns O(1) for factorial recursive step
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: Detail the exact steps or provide the minimal Python code snippet needed to reproduce the issue.
+      placeholder: |
+        1. Submit the following Python code snippet to `/api/analyze`:
+           ```python
+           def fact(n):
+               if n <= 1:
+                   return 1
+               return n * fact(n - 1)
+           ```
+        2. Inspect the derived complexity and reasoning.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: Describe what you expected to happen according to mathematical or technical specifications.
+      placeholder: Expected time complexity O(n) and auxiliary space O(n) due to linear call stack depth.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: Describe what actually happened, including any error messages, returned JSON payloads, or UI state.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Information
+      description: Operating system, runtime versions, and execution context.
+      placeholder: |
+        - OS: Windows 11 / Ubuntu 24.04 / macOS Sonoma
+        - Python version: 3.13.x (or 3.11+)
+        - Node.js version: v20.x or v24.x (if frontend-related)
+        - Execution mode: Sandboxed / Local
+    validations:
+      required: true
+  - type: input
+    id: relevant-modules
+    attributes:
+      label: Relevant Modules (Optional)
+      description: Source files or modules suspected to be involved (if known).
+      placeholder: e.g., backend/app/analyzers/recurrence_solver.py, frontend/components/ComplexityOverview.tsx
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic Evidence / Logs (Optional)
+      description: Relevant test failures, stack traces, or terminal logs.
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have confirmed that no secrets, credentials, or proprietary data are included in this report.
+          required: true

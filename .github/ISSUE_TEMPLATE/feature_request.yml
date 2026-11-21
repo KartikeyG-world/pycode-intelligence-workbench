@@ -1,0 +1,62 @@
+name: Feature Request
+description: Propose a new static analyzer capability, metric, algorithm preset, or UI enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an enhancement for the Python Code Intelligence & Performance Workbench!
+
+        > **Note:** Submitting a feature request creates a proposal for community discussion and maintainer review. It does not assign the feature to you or authorize immediate implementation. If approved, contributors may request assignment in the issue comments before beginning work.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Being Solved
+      description: What limitation, algorithmic gap, or user need does this proposal address?
+      placeholder: Describe the current limitation or enhancement opportunity.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-behavior
+    attributes:
+      label: Proposed Behavior
+      description: Describe the proposed enhancement and how it should work.
+      placeholder: Detail the new feature, analyzer capability, or UI component.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-outcome
+    attributes:
+      label: Expected Outcome & Mathematical / Architectural Impact
+      description: What contract, schema, or user outcome will this enhancement produce?
+      placeholder: Describe the output, data structure, or visual presentation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered (Optional)
+      description: Any alternative implementations, formulas, or designs considered.
+  - type: input
+    id: relevant-modules
+    attributes:
+      label: Potentially Relevant Project Modules (Optional)
+      description: Modules or directories that would be affected by this change.
+      placeholder: e.g., backend/app/analyzers/, frontend/components/, docs/
+  - type: textarea
+    id: acceptance-considerations
+    attributes:
+      label: Acceptance Considerations
+      description: What tests or validation criteria should demonstrate that this feature is complete?
+      placeholder: e.g., Deterministic unit tests, metamorphic property tests, zero runtime execution.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Contributor Confirmation
+      options:
+        - label: I understand that submitting this proposal does not constitute an issue assignment, and that work must not begin until an issue is accepted and formally assigned by a maintainer.
+          required: true
+        - label: I confirm this proposal preserves the project's zero-execution static analysis boundary.
+          required: true

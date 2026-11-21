@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Code Social Discord (WOCS 2026)
+    url: https://discord.gg/MSTNyRSPYW
+    about: Ask questions about Winter of Code Social (WOCS) 2026 participation and community onboarding.
+  - name: Winter of Code Social Official Website
+    url: https://woc.codesocial.tech/
+    about: Review official WOCS 2026 programme guidelines, timeline, and rules.

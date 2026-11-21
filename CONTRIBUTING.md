@@ -107,3 +107,9 @@ Technical documentation must identify the source paths and commit against which 
 - Unsupported behavior.
 
 Trello is the project knowledge index; GitHub Markdown is the version-controlled technical documentation. When a documented statement conflicts with source code or an accepted specification, investigate and correct the document rather than silently changing the code contract.
+
+## License for Contributions
+
+By intentionally submitting a contribution for inclusion in this repository, you agree that the contribution is made available under the same MIT License that applies to the project. You retain copyright ownership of your original contribution; this is not a copyright assignment.
+
+Contributors must have the necessary rights and permissions to submit their work. You must not submit copied or third-party material without appropriate authorization and license compliance. Contributions must preserve applicable existing third-party copyright and license notices.

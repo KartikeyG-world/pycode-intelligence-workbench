@@ -122,11 +122,16 @@ Static results are not runtime measurements. The workbench does not provide meas
 
 See [SECURITY.md](SECURITY.md) for the security boundary and disclosure guidance.
 
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for the complete license text.
+
 ## Documentation map
 
 - [Development and operations](DEVELOPMENT.md)
 - [Contribution workflow](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
+- [Project license](LICENSE)
 - [Documentation index](docs/README.md)
 - [System architecture](docs/architecture/system-overview.md)
 - [Phase 1B metric contracts and integration status](docs/architecture/phase-1b-metrics.md)

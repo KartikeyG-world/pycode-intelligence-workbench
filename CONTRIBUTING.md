@@ -9,6 +9,59 @@ Thank you for considering a contribution to the Python Code Intelligence & Perfo
 3. Identify any accepted mathematical or architecture contract affected by the change.
 4. Keep implementation scope narrow. Do not combine unrelated refactors with a feature or fix.
 
+## Winter of Code Social (WOCS) 2026 Workflow
+
+This repository participates in **[Winter of Code Social (WOCS) 2026](https://woc.codesocial.tech/)**, an open-source mentorship initiative organised by Code Social. All WOCS participants must follow these specific procedures:
+
+### Issue Claiming and Assignment
+- **Inspect discussions:** Review the open issue and any existing comments before requesting assignment.
+- **Request assignment:** Comment on the issue stating your interest and briefly describing your proposed technical approach or reproduction plan.
+- **Wait for maintainer confirmation:** **Do not begin implementation before an issue is formally assigned.** Work must not start until a Project Admin or Mentor explicitly assigns the issue to you on GitHub. Pull requests opened without an assigned issue will be closed.
+- **Issue limits:** Avoid claiming or holding multiple incomplete issues. Work on only one or two issues at a time in accordance with WOCS guidelines.
+- **Releasing issues:** If you are unable to complete an assigned issue, comment promptly on the issue to request unassignment so that others may take it up.
+
+### Git and Branching Workflow
+- **Do not work directly on `main`.**
+- Each assigned issue must be handled on its own dedicated branch created from the latest `origin/main`.
+- Use the standard branch prefixes:
+  - `feat/<short-description>` for new features
+  - `fix/<short-description>` for bug fixes
+  - `test/<short-description>` for tests
+  - `docs/<short-description>` for documentation
+  - `refactor/<short-description>` for behavior-preserving refactors
+
+### Pull Request Submission
+Every pull request must:
+- Link the assigned issue in the description (e.g., `Closes #123`).
+- Clearly explain the problem addressed, changes introduced, and design decisions made.
+- Provide the exact verification commands executed and recorded outcomes.
+- Include unit, regression, or metamorphic tests verifying the change.
+- List any known limitations, partial behaviors, or environment constraints.
+- **UI Screenshots:** Any modification altering the frontend user interface, layout, or visual styling must include before/after screenshots or recordings.
+- Update relevant documentation if public behavior or contracts changed.
+
+### WOCS Issue and PR Labels
+The project tracks and evaluates contributions using the following exact labels:
+- `wocs`
+- `level 1`
+- `level 2`
+- `level 3`
+
+Every eligible pull request requires the `wocs` label and **exactly one** difficulty label (`level 1`, `level 2`, or `level 3`) applied before it is merged.
+
+> **Important:**
+> The difficulty level is evaluated and assigned **solely by the Project Admin or Mentor** upon code review based on the actual complexity, scope, and technical depth of the contribution.
+> Contributors must **not** self-assign difficulty labels or promise/assume leaderboard points.
+
+### Responsible AI Usage Policy
+AI-assisted contributions (using tools such as Gemini, ChatGPT, Claude, Copilot, or Cursor) are permitted with restrictions:
+- **Full Contributor Ownership:** Contributors remain solely responsible for every submitted line of code, comment, and documentation. You must thoroughly understand and be able to explain all submitted logic during review.
+- **Human Verification & Testing:** AI-suggested code must be reviewed and tested locally. Do not submit unverified outputs.
+- **Mandatory Disclosure:** Material AI assistance must be disclosed in the pull request description (via the PR template's AI disclosure section).
+- **Prohibition on Low-Effort / Mass-Generated PRs:** Unverified, mass-generated, copied, or low-effort AI contributions are strictly prohibited and will be rejected.
+- **Privacy & Secret Hygiene:** Never submit repository secrets, credentials, environment variables, or private data to external AI models.
+- **Invariants Preservation:** All contributions must strictly preserve the workbench's zero-execution static analysis boundary (no `eval`, `exec`, or dynamic tracing) and mathematical immutability guarantees.
+
 ## Branching
 
 Do not commit feature work directly to `main`. Use a focused branch based on the latest approved `main`:
@@ -85,12 +138,15 @@ Stage only intended files; avoid indiscriminate staging if the working tree cont
 
 Include the following in the pull request description:
 
-- Problem being solved and linked issue.
+- Problem being solved and linked assigned issue.
+- Confirmation of prior issue assignment.
 - Scope of the change and key design decisions.
 - Files/modules changed.
 - Tests added or updated.
 - Exact verification commands and outcomes.
 - Known limitations, partial behavior or environment-specific test gaps.
+- UI screenshots or recordings for any visual/frontend modifications.
+- AI assistance disclosure, if applicable.
 - API/schema or compatibility impact.
 - Documentation updates where public behavior or architecture changed.
 

@@ -26,6 +26,9 @@ def test_analyze_valid_code(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
+    assert data["persistence_status"] == "saved"
+    assert data["persistence_warning"] is None
+    assert isinstance(data["submission_id"], str) and len(data["submission_id"]) > 0
     assert data["time_complexity"] == "O(n²)"
     assert data["confidence"] == "HIGH"
     assert "Two nested loops" in data["complexity_reasoning"]

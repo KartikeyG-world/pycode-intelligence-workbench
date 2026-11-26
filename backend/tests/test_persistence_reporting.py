@@ -47,6 +47,17 @@ def test_service_persistence_success(db_session: Session):
         .first()
     )
     assert saved_submission is not None
+    assert saved_submission.title == "Saved Snippet"
+
+    saved_result = (
+        db_session.query(AnalysisResult)
+        .filter(AnalysisResult.submission_id == res.submission_id)
+        .first()
+    )
+    assert saved_result is not None
+    assert saved_result.time_complexity == res.time_complexity
+    assert saved_result.space_complexity == res.space_complexity
+    assert saved_result.confidence == res.confidence
 
 
 def test_service_flush_failure_rolls_back_and_reports_warning(db_session: Session, caplog):
@@ -119,3 +130,33 @@ def test_api_analyze_reports_persistence_failure_without_creating_history(client
     assert history_after.status_code == 200
     after_ids = {item["submission_id"] for item in history_after.json()}
     assert after_ids == before_ids
+
+
+def test_api_analyze_success_persists_and_returns_in_history(client: TestClient):
+    response = client.post(
+        "/api/analyze",
+        json={"title": "API Saved Snippet", "code": SAMPLE_CODE},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["persistence_status"] == "saved"
+    assert data["persistence_warning"] is None
+    submission_id = data["submission_id"]
+    assert isinstance(submission_id, str) and len(submission_id) > 0
+
+    history_response = client.get("/api/history")
+    assert history_response.status_code == 200
+    history_items = history_response.json()
+    matching_items = [item for item in history_items if item["submission_id"] == submission_id]
+    assert len(matching_items) == 1
+    assert matching_items[0]["title"] == "API Saved Snippet"
+    assert matching_items[0]["time_complexity"] == "O(n)"
+
+    detail_response = client.get(f"/api/history/{submission_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["submission_id"] == submission_id
+    assert detail["title"] == "API Saved Snippet"
+    assert detail["code"] == SAMPLE_CODE

@@ -114,8 +114,6 @@ The FastAPI application mounts the following routes under `/api`:
 
 FastAPI's interactive API documentation is available at `/docs` when the backend is running. The endpoint contracts are defined by the route and Pydantic schema modules; do not treat live analysis responses and historical persistence responses as identical data models.
 
-For history endpoint behavior, response schemas, persistence lifecycle, and known limitations, see [Analysis History API](docs/api/ANALYSIS_HISTORY_API.md).
-
 ## Static-analysis and security boundary
 
 Submitted Python is parsed into AST data and analyzed without being executed. The parser enforces a 100,000-byte source limit, a 3,000-line limit, a 10,000-node AST limit and a depth limit of 200. The AST node/depth checks run after `ast.parse` has produced the tree; they do not eliminate all resource risks inside the interpreter's parsing stage. Deployments that accept hostile input should use process/container isolation and operating-system resource limits in addition to application-level checks.

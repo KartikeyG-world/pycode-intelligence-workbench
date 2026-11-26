@@ -114,6 +114,8 @@ export interface AnalyzeResponse {
   call_graph?: Record<string, unknown>;
   error?: SyntaxErrorInfo;
   submission_id?: string;
+  persistence_status?: "saved" | "failed" | "skipped" | null;
+  persistence_warning?: string | null;
 }
 
 export interface HistoryItem {

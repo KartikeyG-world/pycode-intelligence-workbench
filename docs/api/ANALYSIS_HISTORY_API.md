@@ -207,19 +207,37 @@ When a database session is supplied to the analysis service and analysis succeed
 4. Creates an AnalysisResult containing the analysis output.
 5. Adds the analysis result to the session.
 6. Commits the transaction.
-7. Sets submission_id on the analysis response after the commit succeeds.
+7. Sets `submission_id` on the analysis response, sets `persistence_status` to `"saved"`, and keeps `persistence_warning` as `null` after the commit succeeds.
 
-Syntax errors return an unsuccessful analysis response and do not enter this persistence workflow.
+Syntax errors return an unsuccessful analysis response (`success: false`) and do not enter this persistence workflow (`persistence_status` remains `null`).
 
-If the analysis service is called without a database session, it can return an analysis response without saving a history record.
+If the analysis service is called without a database session (`db=None`), it returns the analysis response with `persistence_status` set to `"skipped"` and `persistence_warning` as `null` without saving a history record.
 
-## 7. Persistence Failure Behavior
+## 7. Persistence Status Contract and Failure Behavior
 
-If an exception occurs during persistence, the service rolls back the database session and continues returning the analysis response.
+`AnalyzeResponse` (defined in `backend/app/schemas/analysis.py`) exposes two optional fields to communicate whether an analysis result was persisted to history:
 
-The current implementation does not expose a dedicated persistence-status field or log the persistence exception in this code path. In this case, the response may not contain submission_id even though the analysis itself succeeded.
+| Field | Type | Description |
+|---|---|---|
+| `persistence_status` | `"saved" \| "failed" \| "skipped" \| null` | Outcome of persisting the analysis to history (`null` when analysis did not enter persistence, such as syntax errors). |
+| `persistence_warning` | `string \| null` | Safe, user-facing warning message when `persistence_status` is `"failed"`; `null` otherwise. |
 
-This behavior is a current implementation limitation, not a guarantee that the history record was saved. See [issue #16](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues/16) for the tracked persistence-failure correction.
+### Status values
+
+- `"saved"`: Both `CodeSubmission` and `AnalysisResult` were committed to the database, and `submission_id` is populated on the response.
+- `"skipped"`: No database session was supplied to `AnalysisService.analyze_code()`, so persistence was intentionally bypassed (`submission_id` is `null`).
+- `"failed"`: Static analysis succeeded, but persisting the history record failed during `flush()` or `commit()`.
+
+### Failure-reporting behavior
+
+If an exception occurs during persistence, `AnalysisService.analyze_code()` (`backend/app/services/analysis_service.py`):
+
+1. Rolls back the database session (`db.rollback()`).
+2. Logs the full exception server-side via `logger.exception("Failed to persist analysis result to database")`.
+3. Sets `submission_id` to `null`.
+4. Sets `persistence_status` to `"failed"`.
+5. Sets `persistence_warning` to `"Analysis succeeded, but saving to history failed. This result will not appear in your analysis history."` (without leaking internal database error details to API clients).
+6. Returns the completed analysis response (`success: true`) so clients still receive the complexity analysis while being explicitly informed that history persistence failed (addressing [issue #16](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues/16)).
 
 
 
@@ -260,29 +278,35 @@ Clients should not assume that every history timestamp includes an explicit UTC 
 
 ## 11. Test Coverage
 
-The inspected backend test suite includes a history-list endpoint test in backend/tests/test_api.py.
+The inspected backend test suite includes history-list endpoint tests in `backend/tests/test_api.py` and dedicated persistence-reporting tests in `backend/tests/test_persistence_reporting.py`.
 
-The existing test checks that GET /api/history returns HTTP 200 and a JSON list. The backend test fixtures use a separate SQLite database for test execution.
+The existing tests verify:
 
-The inspected tests do not provide dedicated coverage for all history behaviors, including:
+- `GET /api/history` returns HTTP 200 and a JSON list.
+- `POST /api/analyze` returns `persistence_status: "saved"` and a valid `submission_id`, persists both `CodeSubmission` and `AnalysisResult`, and makes the entry retrievable via `GET /api/history` and `GET /api/history/{submission_id}`.
+- `AnalysisService.analyze_code()` sets `persistence_status: "skipped"` when `db=None`.
+- Database `flush()` and `commit()` failures trigger `db.rollback()`, log the server-side exception, avoid creating partial history rows, and return `persistence_status: "failed"` with a sanitized `persistence_warning`.
 
-- History detail responses and missing submission IDs.
+The backend test fixtures use a separate SQLite database for test execution.
+
+The inspected tests do not provide dedicated coverage for all remaining history behaviors, including:
+
+- Missing submission IDs on history detail (`GET /api/history/{submission_id}` 404).
 - Deleting a history entry and cascade behavior.
 - Minimum and maximum validation for the limit parameter.
-- Persistence failure handling and transaction rollback behavior.
 - Preservation of timezone offsets in returned timestamps.
 - Execution of the PostgreSQL migration workflow.
 
-These are test-coverage observations from the inspected repository snapshot, not claims that the behaviors are necessarily broken. Related implementation corrections are tracked in issues #15, #16, #17, and #19.
+These are test-coverage observations from the inspected repository snapshot, not claims that the behaviors are necessarily broken. Related implementation corrections are tracked in issues #15, #17, and #19.
 
 ## 12. Related Issues
 
-The following open issues track corrections or improvements related to the current analysis-history implementation:
+The following issues track corrections or improvements related to the analysis-history implementation:
 
-| Issue | Topic | Documented limitation |
+| Issue | Topic | Status / Documented limitation |
 |---|---|---|
 | [#15](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues/15) | History result limits | Missing explicit minimum and maximum validation for the limit parameter. |
-| [#16](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues/16) | Persistence failures | Persistence exceptions are rolled back but not surfaced through a dedicated response status. |
+| [#16](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues/16) | Persistence failures | Addressed: persistence exceptions roll back, log server-side, and report `persistence_status: "failed"` with `persistence_warning`. |
 | [#17](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues/17) | Timestamp offsets | UTC offset preservation is not guaranteed through the current database path. |
 | [#19](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues/19) | PostgreSQL migrations | A complete executable Alembic migration workflow is not established. |
 
@@ -295,6 +319,7 @@ The current behavior described in this document was checked against these implem
 | File | Relevant implementation |
 |---|---|
 | backend/app/api/routes/history.py | History list, detail, and delete endpoints. |
+| backend/app/schemas/analysis.py | `AnalyzeResponse` persistence status and warning fields. |
 | backend/app/schemas/project.py | HistoryItemResponse and HistoryDetailResponse schemas. |
 | backend/app/models/models.py | CodeSubmission and AnalysisResult models, relationships, and timestamp defaults. |
 | backend/app/services/analysis_service.py | Analysis persistence lifecycle and failure handling. |
@@ -303,7 +328,8 @@ The current behavior described in this document was checked against these implem
 | backend/app/main.py | Startup database checks and SQLite table creation. |
 | backend/alembic/env.py | Alembic migration environment configuration. |
 | backend/alembic/versions/c79742664bb5_initial_schema.py | Initial database schema migration. |
-| backend/tests/test_api.py | Existing API endpoint tests, including history-list coverage. |
+| backend/tests/test_api.py | Existing API endpoint tests, including history-list and analyze persistence checks. |
+| backend/tests/test_persistence_reporting.py | Persistence lifecycle, rollback, logging, and API history-retrieval tests. |
 | backend/conftest.py | Test database and client fixtures. |
 
 This document describes the implementation inspected in the contributor's working checkout at commit b8eba5a500bfb34d40bd7b7f0d71a827764094ae. The repository README identifies the published Unit 5 baseline as commit 84ae1574d567160dcb70f56d6ba745424607dcd9. All 11 implementation and test files referenced above were verified to match that published baseline.

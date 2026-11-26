@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.metrics import UnifiedScopeMetrics, ProjectMetricsSummary
@@ -154,6 +154,8 @@ class AnalyzeResponse(BaseModel):
     call_graph: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[SyntaxErrorInfo] = None
     submission_id: Optional[str] = None
+    persistence_status: Optional[Literal["saved", "failed", "skipped"]] = None
+    persistence_warning: Optional[str] = None
     scope_metrics: List[UnifiedScopeMetrics] = Field(default_factory=list)
     project_metrics: Optional[ProjectMetricsSummary] = None
 

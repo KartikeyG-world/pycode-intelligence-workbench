@@ -209,6 +209,25 @@ export default function Home() {
           {/* Active Analysis Dashboard */}
           {!isLoading && analysisResult && analysisResult.success && (
             <div className="space-y-4">
+              {/* Persistence Failure Warning */}
+              {analysisResult.persistence_status === "failed" && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-3"
+                >
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <div className="font-semibold text-amber-100">
+                      History Not Saved
+                    </div>
+                    <p className="text-amber-200/90">
+                      {analysisResult.persistence_warning ??
+                        "Analysis succeeded, but saving to history failed."}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* 1. Complexity Metric Cards */}
               <ComplexityOverview
                 timeComplexity={analysisResult.time_complexity}

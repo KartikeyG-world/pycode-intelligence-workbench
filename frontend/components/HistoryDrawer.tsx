@@ -87,7 +87,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
               <Clock className="w-8 h-8 stroke-[1.5] mb-2 opacity-40" />
               <p>No past analysis records found.</p>
               <p className="text-[11px] text-zinc-600 mt-1">
-                Analyses are saved to Supabase / PostgreSQL database automatically.
+                Successful analyses are saved automatically when database persistence is available.
               </p>
             </div>
           ) : (

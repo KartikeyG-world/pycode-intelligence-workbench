@@ -4,6 +4,8 @@ import React, { useState, useEffect } from "react";
 import { CodeEditor } from "@/components/CodeEditor";
 import { ComplexityOverview } from "@/components/ComplexityOverview";
 import { StatisticsGrid } from "@/components/StatisticsGrid";
+import { MetricsOverview } from "@/components/metrics/MetricsOverview";
+import { ScopeMetricsTable } from "@/components/metrics/ScopeMetricsTable";
 import { ComplexityChart } from "@/components/ComplexityChart";
 import { StructureFlow } from "@/components/StructureFlow";
 import { ReasoningPanel } from "@/components/ReasoningPanel";
@@ -247,7 +249,11 @@ export default function Home() {
               {/* 2. Analysis Statistics */}
               <StatisticsGrid stats={analysisResult.statistics} />
 
-              {/* 3. Deep Dive Visualizations (Chart vs React Flow Graph) */}
+              {/* 3. Phase 1B.2 Project Metrics & Per-Scope Explorer */}
+              <MetricsOverview metrics={analysisResult.project_metrics} />
+              <ScopeMetricsTable scopes={analysisResult.scope_metrics} />
+
+              {/* 4. Deep Dive Visualizations (Chart vs React Flow Graph) */}
               <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl overflow-hidden">
                 {/* Visualizer Tabs Header */}
                 <div className="flex items-center justify-between px-4 py-2 bg-zinc-900/90 border-b border-zinc-800">

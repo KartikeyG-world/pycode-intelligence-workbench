@@ -1,6 +1,6 @@
 # System Architecture Overview
 
-**Verified source baseline:** public `main`, Unit 5 commit `84ae1574d567160dcb70f56d6ba745424607dcd9`.
+**Verified source baseline:** public `main`, commit `c26fdd36837bc0782c9e840b370f478e306857a2`.
 
 ## 1. System boundary
 
@@ -8,15 +8,16 @@ The application consists of a Next.js frontend, a FastAPI backend, static Python
 
 ## 2. Runtime request path
 
-The published Unit 5 request path is:
+The runtime request path is:
 
 1. The browser submits an analysis request to `POST /api/analyze`.
 2. FastAPI validates the request using `AnalyzeRequest` and delegates to `AnalysisService`.
 3. `AnalysisService` calls `SafeASTParser.parse_code`.
 4. On a syntax/parser error, the service returns an `AnalyzeResponse` containing structured error information and no successful analysis result.
 5. On parse success, the service passes the AST to `ComplexityAnalyzer.analyze`.
-6. `ComplexityAnalyzer` constructs a `FunctionIndex` and `CallGraph`, evaluates loops/recurrences/operations, composes interprocedural costs, and builds the legacy structure and theoretical growth data.
-7. The service optionally persists the legacy result fields and returns the response.
+6. `ComplexityAnalyzer` executes `UnifiedMetricsPipeline.run(tree)` to discover canonical scopes, run structural and Halstead analysis, construct procedural CFGs, evaluate statistical correlations, and aggregate project-level metrics, populating `scope_metrics` and `project_metrics`.
+7. `ComplexityAnalyzer` also constructs a `FunctionIndex` and `CallGraph`, evaluates loops/recurrences/operations, composes interprocedural costs, and builds the legacy structure and theoretical growth data.
+8. The service optionally persists the legacy result fields (Phase 1B.2 metrics are dynamically computed and not persisted) and returns the full `AnalyzeResponse`.
 
 The API also exposes a health route and persisted analysis-history routes. The health route executes a database connectivity query; the history routes read the persisted `AnalysisResult`/`CodeSubmission` model.
 
@@ -49,13 +50,13 @@ The request path uses the interprocedural and asymptotic analysis family:
 
 The exact supported pattern set and confidence semantics are determined by the implementation and regression tests; this overview does not promise exact complexity for arbitrary Python programs.
 
-## 5. CFG and Phase 1B.2 components in the published tree
+## 5. CFG and Phase 1B.2 unified metrics integration
 
-The public Unit 5 tree contains `cfg_builder.py`, Phase 1B.2 metric schemas, scope discovery, structural metrics, Halstead metrics, correlation and project-summary modules. These modules have focused tests. However, the Unit 5 `ComplexityAnalyzer` does not import or call `CFGBuilder` or a unified metrics pipeline. The request path therefore remains the Phase 1A pipeline at this published checkpoint.
+The repository contains `cfg_builder.py`, Phase 1B.2 metric schemas, canonical scope discovery, structural metrics, Halstead metrics, correlation and project-summary modules. In Unit 6 (`64adf3d256f04ff43796b933875887b2f34d3179`, merged via PR #26), `metrics_pipeline.py` was introduced as the unified coordinator and wired into `ComplexityAnalyzer.analyze()`.
 
-The response model already declares `scope_metrics` (default empty list) and `project_metrics` (default null). The Unit 5 `ComplexityAnalyzer` return construction does not populate these fields. Schema presence must not be confused with an integrated capability.
-
-The local Unit 6 commit `64adf3d256f04ff43796b933875887b2f34d3179` is reported to add `metrics_pipeline.py` and connect it to `ComplexityAnalyzer`. It is not present on the public remote in this documentation snapshot. See [Phase 1B metrics](phase-1b-metrics.md).
+The `AnalyzeResponse` returned by `/api/analyze` dynamically populates:
+- `scope_metrics`: Unified records binding cyclomatic, structural, and Halstead complexity per canonical scope in lexical preorder.
+- `project_metrics`: Project-wide summary aggregating procedural averages, diagnostic populations, and Pearson/Spearman correlations across the 5 approved dimensions.
 
 ## 6. Persistence boundary
 
@@ -65,7 +66,7 @@ A persistence change requires a separate architecture decision and migration pla
 
 ## 7. Frontend boundary
 
-The current frontend is built with Next.js/React and uses Monaco Editor, Recharts and React Flow for the existing analysis experience. The inspected `frontend/types/analysis.ts` does not declare the Phase 1B.2 metric objects, and the existing page/component set does not render CFG, Halstead, correlation or project-summary metric views. Frontend integration is separate future work.
+The frontend is built with Next.js/React and uses Monaco Editor, Recharts and React Flow. Phase 1C Unit 1 actively introduces TypeScript type contracts and UI components (`MetricsOverview`, `ScopeMetricsTable`) to visualize the project-level metrics summary and per-scope complexity explorer.
 
 ## 8. Design invariants
 

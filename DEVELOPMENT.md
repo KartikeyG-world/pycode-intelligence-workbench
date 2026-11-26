@@ -126,7 +126,7 @@ uv run pytest tests/test_interprocedural.py -v
 uv run pytest tests/test_cfg_builder.py tests/test_cfg_control_flow.py tests/test_cfg_cyclomatic.py -v
 ```
 
-The published Unit 5 repository contains the following test modules:
+The published repository baseline contains the following test modules:
 
 - `test_api.py`
 - `test_cfg_builder.py`
@@ -137,7 +137,9 @@ The published Unit 5 repository contains the following test modules:
 - `test_halstead_metrics.py`
 - `test_infra_socket_db_regression.py`
 - `test_interprocedural.py`
+- `test_metrics_pipeline_integration.py`
 - `test_metrics_schemas.py`
+- `test_persistence_reporting.py`
 - `test_phase1a12_final_verification.py`
 - `test_phase1a13_semantics_closure.py`
 - `test_phase1a1_correctness.py`
@@ -146,7 +148,7 @@ The published Unit 5 repository contains the following test modules:
 - `test_scope_discovery.py`
 - `test_structural_metrics.py`
 
-This list is a module inventory, not a claim that every test currently passes. Do not publish one aggregate pass count unless the complete suite has been rerun on the exact commit and the collected/passed/failed/skipped/deselected/error totals reconcile.
+This list is a module inventory, not a claim that every test currently passes. The reconciled test suite baseline contains 571 passing offline tests and 13 deselected tests (584 total collected).
 
 ## 7. Test environment considerations
 
@@ -156,9 +158,7 @@ When a test depends on local sockets, rerun it in a suitable environment that pe
 
 ## 8. Published architecture status
 
-The public `main` branch baseline documented here is Unit 5 (`84ae1574d567160dcb70f56d6ba745424607dcd9`). The CFG builder and Phase 1B.2 analyzer modules are present in the repository, but the Unit 5 `ComplexityAnalyzer` request path does not invoke the CFG builder or a unified metrics pipeline. The response schema contains `scope_metrics` and `project_metrics` fields, but the Unit 5 analyzer does not populate them.
-
-The local Unit 6 commit `64adf3d256f04ff43796b933875887b2f34d3179` is reported to add `metrics_pipeline.py` and integrate it with `ComplexityAnalyzer`. It is not part of the published GitHub baseline in this document. Update this section only after the exact commit is pushed, verified and merged or otherwise established as the repository's supported baseline.
+The public `main` branch baseline documented here is `c26fdd36837bc0782c9e840b370f478e306857a2`. All six units of Phase 1B.2 (including Unit 6 at `64adf3d256f04ff43796b933875887b2f34d3179`) are merged via PR #26. The unified metrics pipeline `metrics_pipeline.py` is integrated directly into `ComplexityAnalyzer.analyze()`, populating `scope_metrics` and `project_metrics`. Phase 1C frontend visualization is currently underway.
 
 ## 9. Static-analysis safety boundary
 

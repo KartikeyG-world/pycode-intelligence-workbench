@@ -2,7 +2,7 @@
 
 A static-analysis workbench for inspecting Python program structure and reasoning about algorithmic complexity without executing submitted source code.
 
-> **Repository-state note (20 November 2026):** This documentation draft targets the published GitHub baseline `84ae1574d567160dcb70f56d6ba745424607dcd9` (Unit 5). The local Unit 6 commit `64adf3d256f04ff43796b933875887b2f34d3179` is not present on the GitHub remote yet. The Unit 6 unified metrics pipeline is therefore described as pending publication, not as part of the current public `main` branch.
+> **Repository-state note (26 November 2026):** This documentation reflects the published GitHub `main` baseline `c26fdd36837bc0782c9e840b370f478e306857a2`. All six units of Phase 1B.2 (including the Unit 6 checkpoint `64adf3d256f04ff43796b933875887b2f34d3179` via PR #26) are merged into `main`. The unified metrics pipeline is integrated into `ComplexityAnalyzer`, and Phase 1C frontend visualization is the active development phase.
 
 ## What the workbench does
 
@@ -12,20 +12,20 @@ The repository also contains a Control Flow Graph (CFG) builder and Phase 1B.2 m
 
 ## Current capability status
 
-Status below is evaluated against the published Unit 5 commit identified above.
+Status below is evaluated against the merged `main` baseline `c26fdd36837bc0782c9e840b370f478e306857a2`.
 
 | Capability | Published status | Notes |
 |---|---|---|
 | Safe Python AST parsing | Implemented | Static parsing with source-size, line-count, AST-node and AST-depth limits. |
 | Phase 1A complexity analysis | Implemented / API-integrated | Function indexing, call graph, loops, recursion/recurrences, operation-cost analysis and cost composition. |
-| CFG construction and cyclomatic analysis | Implemented as backend modules | CFG implementation and tests are present; the current `ComplexityAnalyzer` HTTP path does not invoke the CFG builder. |
-| Phase 1B.2 schemas and analyzer modules | Present in backend source | Scope discovery, structural metrics, Halstead metrics, correlation and project-summary modules exist. |
-| Unified Phase 1B.2 metrics pipeline | Pending publication | The local Unit 6 commit adds `metrics_pipeline.py` and wires it into `ComplexityAnalyzer`; that commit is not on GitHub as of this snapshot. |
-| Phase 1B.2 frontend visualization | Not implemented | The current frontend types and components do not render the new metrics. |
-| Runtime profiling / benchmarking | Not implemented | The application does not execute submitted code or measure runtime performance. |
+| CFG construction and cyclomatic analysis | Implemented & integrated | CFG construction and cyclomatic metrics are computed per procedural scope via `CFGBuilder` and mapped into `ScopeCyclomaticMetrics`. |
+| Phase 1B.2 schemas and analyzer modules | Implemented & integrated | Scope discovery, structural metrics, Halstead metrics, correlation and project-summary modules are fully implemented. |
+| Unified Phase 1B.2 metrics pipeline | Implemented & integrated | `metrics_pipeline.py` orchestrates canonical scope metrics and is integrated into `ComplexityAnalyzer`, populating `scope_metrics` and `project_metrics`. |
+| Phase 1B.2 / 1C frontend visualization | In progress (Phase 1C) | Phase 1C Unit 1 integrates project metrics overview and per-scope explorer components into the web interface. |
+| Runtime profiling / benchmarking | Not implemented | The application does not execute submitted code or measure runtime performance (zero-execution static analysis boundary). |
 | Automatic source optimization / rewriting | Not implemented | Suggestions are rule-based text; no semantics-preserving rewrite engine is present. |
 
-The published `AnalyzeResponse` schema includes `scope_metrics` and `project_metrics` fields. On the published Unit 5 baseline, the analyzer does not populate these fields; they retain their schema defaults (an empty scope list and a null project summary). Do not infer an integrated metrics API from schema-field presence alone.
+The API response schema includes dynamically populated `scope_metrics` and `project_metrics` fields. Phase 1B.2 metrics are computed dynamically on each request and are not persisted in the current SQLite history schema.
 
 ## Architecture at a glance
 
@@ -56,7 +56,7 @@ AnalyzeResponse (Pydantic)
         +--> optional persistence of the legacy analysis fields
 ```
 
-Additional CFG and Phase 1B.2 metric engines are available as backend modules, but the unified Unit 6 orchestration is pending publication at this baseline. Detailed ownership boundaries are in [System architecture](docs/architecture/system-overview.md).
+The CFG engine and Phase 1B.2 metric engines are unified through `UnifiedMetricsPipeline` and invoked by `ComplexityAnalyzer`. Detailed ownership boundaries are in [System architecture](docs/architecture/system-overview.md).
 
 ## Technology stack
 
@@ -156,14 +156,13 @@ External contributors, student developers, and open-source participants are welc
 ## Known documentation and integration gaps
 
 1. The runtime default `PROJECT_NAME` in `backend/app/core/config.py` and `.env.example` still uses the legacy name `Code Complexity Visualizer`; this is a configuration-alignment item, not a claim that the runtime title has already been changed.
-2. The Phase 1B.2 unified pipeline exists in a local Unit 6 commit but has not been published to GitHub at the snapshot recorded here.
-3. The frontend does not yet expose Phase 1B/1B.2 metrics.
-4. HTTP `TestClient` execution was blocked by loopback socket setup failures in the reported Windows sandbox. API transport verification must be repeated in an environment that supports the required local sockets.
-5. Test totals reported in the source audit did not reconcile arithmetically. This documentation intentionally does not publish an aggregate test count.
+2. Phase 1B.2 backend metrics are fully merged into `main`; Phase 1C frontend visualization is currently under active development.
+3. HTTP `TestClient` execution was blocked by loopback socket setup failures in the reported Windows sandbox. API transport verification must be repeated in an environment that supports the required local sockets.
+4. Reconciled test suite baseline: 571 offline tests passing, 13 deselected (584 total collected).
 
 ## Repository baseline
 
 - Repository: `KartikeyG-world/pycode-intelligence-workbench`
-- Published branch baseline: `main` at `84ae1574d567160dcb70f56d6ba745424607dcd9`
-- Local Unit 6 checkpoint pending publication: `64adf3d256f04ff43796b933875887b2f34d3179`
-- Documentation snapshot date: 20 November 2026
+- Published branch baseline: `main` at `c26fdd36837bc0782c9e840b370f478e306857a2`
+- Merged Phase 1B.2 checkpoint: `64adf3d256f04ff43796b933875887b2f34d3179` (PR #26)
+- Documentation snapshot date: 26 November 2026

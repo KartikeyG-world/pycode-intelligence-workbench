@@ -1,29 +1,35 @@
 # Phase 1B Metrics: Contracts and Integration Status
 
 **Specification family:** Stage 0.7 metric contract and Stage 1.0.2 architecture contract.  
-**Published source baseline:** Unit 5, `84ae1574d567160dcb70f56d6ba745424607dcd9`.  
-**Local integration checkpoint pending publication:** Unit 6, `64adf3d256f04ff43796b933875887b2f34d3179`.
+**Published source baseline:** `main`, `c26fdd36837bc0782c9e840b370f478e306857a2`.
+**Merged integration checkpoint:** Unit 6, `64adf3d256f04ff43796b933875887b2f34d3179` (merged via PR #26).
 
-## 1. Why the status distinction matters
+## 1. Phase 1B.2 completion and integration status
 
-The published Unit 5 repository contains the metric schemas and analyzer modules for Phase 1B.2. It does not contain `backend/app/analyzers/metrics_pipeline.py`, and the published `ComplexityAnalyzer` does not invoke the CFG builder or the Phase 1B.2 analyzers. Although `AnalyzeResponse` declares `scope_metrics` and `project_metrics`, Unit 5 leaves them at their model defaults (empty list and null project summary).
+All six implementation units of Phase 1B.2 are completed, verified, and merged into the public `main` branch:
+1. Unit 1: Pydantic Schemas & Data Contracts (`b703dec`)
+2. Unit 2: Canonical Scope Discovery Adapter (`4d86c3b`)
+3. Unit 3: Structural AST Metrics Engine (`c24c223`)
+4. Unit 4: AST-Normalized Halstead Complexity Engine (`4bc88f6`)
+5. Unit 5: Correlation Engine & Project Metrics Aggregation (`84ae157`)
+6. Unit 6: Unified Metrics Pipeline Integration & API Service Wiring (`64adf3d`)
 
-The local Unit 6 commit is reported to add the unified pipeline and integrate it into `ComplexityAnalyzer`. Until that commit is pushed and verified on GitHub, do not describe this integration as part of the public `main` branch.
+The unified metrics pipeline (`backend/app/analyzers/metrics_pipeline.py`) coordinates canonical scope discovery, structural metrics, Halstead analysis, procedural CFGs, and statistical correlation, and is integrated directly into `ComplexityAnalyzer.analyze()`. The API response dynamically populates `AnalyzeResponse.scope_metrics` and `AnalyzeResponse.project_metrics`.
 
 ## 2. Component inventory
 
-| Component | Source module | Published Unit 5 status |
+| Component | Source module | Status |
 |---|---|---|
-| Metrics Pydantic schemas | `backend/app/schemas/metrics.py` | Present |
-| Canonical scope discovery | `backend/app/analyzers/scope_discovery.py` | Present |
-| Structural AST metrics | `backend/app/analyzers/structural_analyzer.py` | Present |
-| AST-normalized Halstead analysis | `backend/app/analyzers/halstead_analyzer.py` | Present |
-| Control Flow Graph / cyclomatic | `backend/app/analyzers/cfg_builder.py` | Present and independently tested |
-| Correlation engine | `backend/app/analyzers/correlation_engine.py` | Present |
-| Project metrics aggregation | `backend/app/analyzers/project_summary.py` | Present |
-| Unified metrics orchestration | `backend/app/analyzers/metrics_pipeline.py` | Not present in published Unit 5 |
-| Phase 1B.2 API response population | `backend/app/analyzers/complexity_analyzer.py` | Not integrated in published Unit 5 |
-| Phase 1B.2 frontend | `frontend/types/analysis.ts`, `frontend/components/` | Not implemented |
+| Metrics Pydantic schemas | `backend/app/schemas/metrics.py` | Implemented & merged |
+| Canonical scope discovery | `backend/app/analyzers/scope_discovery.py` | Implemented & merged |
+| Structural AST metrics | `backend/app/analyzers/structural_analyzer.py` | Implemented & merged |
+| AST-normalized Halstead analysis | `backend/app/analyzers/halstead_analyzer.py` | Implemented & merged |
+| Control Flow Graph / cyclomatic | `backend/app/analyzers/cfg_builder.py` | Implemented & merged |
+| Correlation engine | `backend/app/analyzers/correlation_engine.py` | Implemented & merged |
+| Project metrics aggregation | `backend/app/analyzers/project_summary.py` | Implemented & merged |
+| Unified metrics orchestration | `backend/app/analyzers/metrics_pipeline.py` | Implemented & merged |
+| Phase 1B.2 API response population | `backend/app/analyzers/complexity_analyzer.py` | Integrated & merged |
+| Phase 1B.2 / 1C frontend visualization | `frontend/types/analysis.ts`, `frontend/components/` | In progress (Phase 1C Unit 1) |
 
 ## 3. Canonical scope contract
 
@@ -138,7 +144,7 @@ Do not add project-wide sums of Halstead vocabulary/length, weighted Halstead to
 
 Under Stage 1.0.2, Phase 1B.2 `scope_metrics` and `project_metrics` are computed dynamically and are not persisted in the existing `analysis_results` table. Historical retrieval therefore does not provide those fields from stored records. Any persistence change requires an explicit architecture decision and migration plan.
 
-The inspected frontend response types and components do not yet expose the Phase 1B.2 metric models, CFG view, Halstead inventory, correlation report or project summary dashboard. Do not claim frontend integration until types, API handling and rendered components are implemented and tested.
+Frontend integration is currently underway in Phase 1C: Unit 1 implements the project metrics overview and per-scope explorer components, consuming the live `scope_metrics` and `project_metrics` payload.
 
 ## 10. Evidence and tests
 
@@ -164,4 +170,4 @@ Relevant test modules:
 - `backend/tests/test_correlation_engine.py`
 - `backend/tests/test_project_metrics_summary.py`
 
-The local Unit 6 integration test module `test_metrics_pipeline_integration.py` and `metrics_pipeline.py` were reported in local commit `64adf3d...`; neither is part of the published Unit 5 GitHub baseline. After Unit 6 is published, update this document with the new immutable source commit and the verified integration test results.
+The Unit 6 integration test module `test_metrics_pipeline_integration.py` (37 tests) and `metrics_pipeline.py` were formally accepted at commit `64adf3d256f04ff43796b933875887b2f34d3179` and merged into `main` via PR #26.

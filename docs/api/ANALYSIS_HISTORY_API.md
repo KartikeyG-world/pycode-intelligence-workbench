@@ -51,7 +51,7 @@ Example structure (illustrative values):
     "code_snippet": "def sort_items(items): return sorted(items)",
     "time_complexity": "O(n log n)",
     "space_complexity": "O(n)",
-    "confidence": "high",
+    "confidence": "HIGH",
     "created_at": "2026-11-25T12:30:00"
   }
 ]
@@ -71,6 +71,35 @@ Returns the stored analysis result associated with the supplied submission ID.
 ### Not found behavior
 
 If no matching analysis result exists, the endpoint returns HTTP 404 with the detail message Analysis result not found.
+
+### Example
+
+Request:
+
+```bash
+curl -X GET "http://localhost:8000/api/history/submission-uuid"
+```
+
+Successful response (`200 OK`):
+
+```json
+{
+  "id": "analysis-result-uuid",
+  "submission_id": "submission-uuid",
+  "title": "Sorting example",
+  "code": "def sort_items(items): return sorted(items)",
+  "time_complexity": "O(n log n)",
+  "space_complexity": "O(n)",
+  "confidence": "HIGH",
+  "complexity_reasoning": "Example reasoning",
+  "statistics": {},
+  "structure": {},
+  "graph_data": {},
+  "detected_patterns": [],
+  "optimization_suggestions": [],
+  "created_at": "2026-11-25T12:30:00"
+}
+```
 
 ### Response fields
 
@@ -103,6 +132,22 @@ Deletes the CodeSubmission associated with the supplied submission ID.
 - The AnalysisResult foreign key also declares ON DELETE CASCADE.
 - A successful deletion returns HTTP 204 No Content.
 - If the submission does not exist, the endpoint returns HTTP 404 with the detail message Submission not found.
+
+### Example
+
+Request:
+
+```bash
+curl -i -X DELETE "http://localhost:8000/api/history/submission-uuid"
+```
+
+Successful response:
+
+```http
+HTTP/1.1 204 No Content
+```
+
+The response has no body.
 
 ### Important distinction
 
@@ -261,4 +306,4 @@ The current behavior described in this document was checked against these implem
 | backend/tests/test_api.py | Existing API endpoint tests, including history-list coverage. |
 | backend/conftest.py | Test database and client fixtures. |
 
-This document describes the implementation inspected in the contributor's working checkout. The repository README identifies the published Unit 5 baseline as commit 84ae1574d567160dcb70f56d6ba745424607dcd9. All 11 implementation and test files referenced above were verified to match that baseline in the current checkout.
+This document describes the implementation inspected in the contributor's working checkout at commit b8eba5a500bfb34d40bd7b7f0d71a827764094ae. The repository README identifies the published Unit 5 baseline as commit 84ae1574d567160dcb70f56d6ba745424607dcd9. All 11 implementation and test files referenced above were verified to match that published baseline.

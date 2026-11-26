@@ -71,12 +71,14 @@ These are reported historical observations, not a promise that the same result w
 
 ## Test-count reconciliation
 
-The accepted Unit 6 verification established the reconciled test baseline:
-- 15 earlier offline modules: 534 tests
-- Unit 6 integration suite (`test_metrics_pipeline_integration.py`): 37 tests
-- Offline repository regression suite: 571 passed, 13 deselected
-- Full test collection: 584 tests collected
-- 13 deselected tests: 7 pure SQLite database tests pass; 6 tests depend on loopback socket communication and are unverified in restricted Windows sandbox environments. HTTP endpoint execution remains unverified via offline results.
+The accepted Unit 6 checkpoint reported:
+- 584 total collected tests.
+- 571 passing in the specified offline regression command (15 earlier offline modules: 534 tests; Unit 6 integration suite `test_metrics_pipeline_integration.py`: 37 tests).
+- 13 deselected by that command's module-name filter.
+- Seven pure SQLite database tests separately passed.
+- Six socket-dependent tests remained unverified in the restricted Windows environment.
+
+These 13 deselected tests are not failures or purely PostgreSQL-dependent tests. HTTP API endpoint execution was not verified at runtime through the offline suite.
 
 ## Required evidence in PRs
 

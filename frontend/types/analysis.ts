@@ -125,10 +125,10 @@ export interface AnalyzeResponse {
 // ============================================================================
 
 export interface UnclassifiedSyntaxRecord {
-  syntax_kind: string;
+  node_class: string;
   lineno?: number | null;
-  end_lineno?: number | null;
-  description?: string | null;
+  col_offset?: number | null;
+  reason: string;
 }
 
 export interface ScopeStructuralMetrics {

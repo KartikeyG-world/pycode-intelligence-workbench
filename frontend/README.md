@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Workbench Frontend
 
-## Getting Started
+The interactive web user interface for the **Python Code Intelligence & Performance Workbench**.
 
-First, run the development server:
+Built with Next.js 16 (App Router), React 19, TypeScript 5, and Tailwind CSS v4.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+---
+
+## Capabilities & Architecture
+
+The frontend provides an interactive, dual-column analysis workspace:
+
+- **Monaco Code Editor (`components/CodeEditor.tsx`):** In-browser Python source code editor with syntax highlighting, line numbers, template selectors, and toolbar actions (Analyze, Reset, Export).
+- **Asymptotic Complexity Overview (`components/ComplexityOverview.tsx`):** Displays deduced time/space complexity, tight bounds, confidence levels, and space breakdown.
+- **AST Control Flow & Hierarchy (`components/StructureFlow.tsx`):** Interactive React Flow diagram (`@xyflow/react`) visualizing AST basic-block control flow, parent-child hierarchy, and basic-block topologies with dark-themed controls.
+- **Project Metrics Overview (`components/metrics/MetricsOverview.tsx`):** Project-wide summary cards aggregating procedural scope counts, structural averages, cyclomatic complexity averages, Halstead volume/effort averages, and diagnostic populations.
+- **Per-Scope Metrics Explorer (`components/metrics/ScopeMetricsTable.tsx`):** Sortable, responsive data table presenting all canonical AST scopes with sticky identifier column pinning, multi-column sorting, and canonical preorder reset.
+- **Detailed Scope Inspector (`components/metrics/ScopeInspector.tsx`):** Deep-dive modal/drawer detailing scope-level cyclomatic complexity, CFG reachability, decision-point breakdown, structural AST distributions, Halstead token inventories, and syntax coverage diagnostics.
+- **Project Correlation Analysis (`components/metrics/ProjectCorrelationSection.tsx`):** Statistical co-variation analysis (Pearson $r$ and Spearman $\rho$) across 5 dimensions with status diagnostics and an interactive scatter plot rendered directly from backend observation pairs.
+
+---
+
+## Directory Structure
+
+```text
+frontend/
+├── app/
+│   ├── globals.css          # Tailwind CSS v4 imports and dark scrollbar rules
+│   ├── layout.tsx           # Root HTML layout, font setup, and document metadata
+│   └── page.tsx             # Main dual-column analysis workspace and state management
+├── components/
+│   ├── CodeEditor.tsx       # Monaco Editor wrapper and toolbar controls
+│   ├── ComplexityOverview.tsx# Algorithmic time/space complexity summary
+│   ├── StructureFlow.tsx    # React Flow AST hierarchy diagram
+│   └── metrics/             # Phase 1C static metrics components
+│       ├── MetricsOverview.tsx
+│       ├── ScopeMetricsTable.tsx
+│       ├── ScopeInspector.tsx
+│       └── ProjectCorrelationSection.tsx
+├── lib/
+│   ├── api.ts               # HTTP client communication with FastAPI backend
+│   └── utils.ts             # Tailwind class merging utilities
+├── types/
+│   └── analysis.ts          # TypeScript type definitions matching backend Pydantic schemas
+├── package.json
+└── tsconfig.json
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Available Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+From the `frontend/` directory:
 
-## Learn More
+| Script | Command | Purpose |
+|---|---|---|
+| `dev` | `npm run dev` | Start Next.js development server (Turbopack) on `http://localhost:3000` |
+| `lint` | `npm run lint` | Run ESLint validation across all pages and components |
+| `typecheck` | `npx tsc --noEmit` | Execute TypeScript strict compiler validation without emitting files |
+| `build` | `npm run build` | Produce optimized Next.js production build (`next build --webpack`) |
+| `start` | `npm run start` | Start Next.js production server from built assets |
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Development & API Communication
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The frontend expects the backend FastAPI server to run at `http://127.0.0.1:8000`.
 
-## Deploy on Vercel
+- Static analysis requests are sent via `POST http://127.0.0.1:8000/api/analyze`.
+- Persisted history queries are sent via `GET http://127.0.0.1:8000/api/history`.
+- Health checks are verified via `GET http://127.0.0.1:8000/api/health`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+For full end-to-end setup and operations, consult the root [DEVELOPMENT.md](../DEVELOPMENT.md).

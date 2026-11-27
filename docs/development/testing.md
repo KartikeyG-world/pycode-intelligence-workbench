@@ -80,6 +80,19 @@ The accepted Unit 6 checkpoint reported:
 
 These 13 deselected tests are not failures or purely PostgreSQL-dependent tests. HTTP API endpoint execution was not verified at runtime through the offline suite.
 
+## Phase 1C verification evidence
+
+On development branch `feat/phase-1c-metrics-overview` at checkpoint `9f70e57624aca59017fc5b570e42c67340987260`, the following multi-layer quality gates were executed and verified:
+
+| Gate | Command | Result | Details |
+|---|---|---|---|
+| Git Diff Whitespace | `git diff --check` | Passed | 0 whitespace or formatting errors |
+| TypeScript Compiler | `npx tsc --noEmit` | Passed | Version 5.9.3, 0 errors, exit code 0 |
+| ESLint | `npm run lint` | Passed | ESLint completed with 0 errors or warnings, exit code 0 |
+| Production Build | `npm run build` | Passed | Next.js 16.3.6 (Webpack) compiled in 4.8s; static pages generated |
+| Backend Pipeline Integration | `pytest tests/test_metrics_pipeline_integration.py` | Passed | 37 passed in 0.41s |
+| Runtime Smoke Test | Browser automated inspection | Passed | All 4 target viewports (1440×900, 1280×800, 768×1024, 390×844) verified; 14 after screenshots |
+
 ## Required evidence in PRs
 
 Every PR that changes behavior should record:

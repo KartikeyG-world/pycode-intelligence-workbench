@@ -29,7 +29,7 @@ The unified metrics pipeline (`backend/app/analyzers/metrics_pipeline.py`) coord
 | Project metrics aggregation | `backend/app/analyzers/project_summary.py` | Implemented & merged |
 | Unified metrics orchestration | `backend/app/analyzers/metrics_pipeline.py` | Implemented & merged |
 | Phase 1B.2 API response population | `backend/app/analyzers/complexity_analyzer.py` | Integrated & merged |
-| Phase 1B.2 / 1C frontend visualization | `frontend/types/analysis.ts`, `frontend/components/` | In progress (Phase 1C Unit 1) |
+| Phase 1C frontend visualization | `frontend/components/metrics/`, `frontend/types/` | Implemented (Phase 1C Units 1–4; see [Phase 1C Guide](phase-1c-frontend-integration.md)) |
 
 ## 3. Canonical scope contract
 
@@ -144,7 +144,13 @@ Do not add project-wide sums of Halstead vocabulary/length, weighted Halstead to
 
 Under Stage 1.0.2, Phase 1B.2 `scope_metrics` and `project_metrics` are computed dynamically and are not persisted in the existing `analysis_results` table. Historical retrieval therefore does not provide those fields from stored records. Any persistence change requires an explicit architecture decision and migration plan.
 
-Frontend integration is currently underway in Phase 1C: Unit 1 implements the project metrics overview and per-scope explorer components, consuming the live `scope_metrics` and `project_metrics` payload.
+Frontend integration is completed across Phase 1C Units 1–4 on the `feat/phase-1c-metrics-overview` development branch:
+- Unit 1: `MetricsOverview` and `ScopeMetricsTable`
+- Unit 2: `ScopeInspector`
+- Unit 3: `ProjectCorrelationSection`
+- Unit 4: End-to-end workspace UX refinement and responsive multi-viewport integration
+
+For complete component specifications and architectural documentation, see [Phase 1C Frontend Metrics Integration Architecture](phase-1c-frontend-integration.md).
 
 ## 10. Evidence and tests
 

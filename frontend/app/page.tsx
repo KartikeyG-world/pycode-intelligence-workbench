@@ -5,6 +5,7 @@ import { CodeEditor } from "@/components/CodeEditor";
 import { ComplexityOverview } from "@/components/ComplexityOverview";
 import { StatisticsGrid } from "@/components/StatisticsGrid";
 import { MetricsOverview } from "@/components/metrics/MetricsOverview";
+import { ProjectCorrelationSection } from "@/components/metrics/ProjectCorrelationSection";
 import { ScopeMetricsTable } from "@/components/metrics/ScopeMetricsTable";
 import { ComplexityChart } from "@/components/ComplexityChart";
 import { StructureFlow } from "@/components/StructureFlow";
@@ -249,8 +250,14 @@ export default function Home() {
               {/* 2. Analysis Statistics */}
               <StatisticsGrid stats={analysisResult.statistics} />
 
-              {/* 3. Phase 1B.2 Project Metrics & Per-Scope Explorer */}
+              {/* 3. Phase 1B.2 Project Metrics & Correlations */}
               <MetricsOverview metrics={analysisResult.project_metrics} />
+              {analysisResult.project_metrics?.correlation && (
+                <ProjectCorrelationSection
+                  correlation={analysisResult.project_metrics.correlation}
+                  scopes={analysisResult.scope_metrics}
+                />
+              )}
               <ScopeMetricsTable scopes={analysisResult.scope_metrics} />
 
               {/* 4. Deep Dive Visualizations (Chart vs React Flow Graph) */}

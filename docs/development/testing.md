@@ -71,14 +71,24 @@ These are reported historical observations, not a promise that the same result w
 
 ## Test-count reconciliation
 
-The accepted Unit 6 checkpoint reported:
-- 584 total collected tests.
-- 571 passing in the specified offline regression command (15 earlier offline modules: 534 tests; Unit 6 integration suite `test_metrics_pipeline_integration.py`: 37 tests).
-- 13 deselected by that command's module-name filter.
-- Seven pure SQLite database tests separately passed.
-- Six socket-dependent tests remained unverified in the restricted Windows environment.
+The historical backend test verification on the accepted Unit 6 baseline collected 584 total tests and established four distinct categories of verification outcomes:
 
-These 13 deselected tests are not failures or purely PostgreSQL-dependent tests. HTTP API endpoint execution was not verified at runtime through the offline suite.
+| Category | Count | Status | Description |
+|---|---|---|---|
+| **Offline suite passed** | 571 | Passed | 534 tests across 15 offline modules plus 37 integration tests in `test_metrics_pipeline_integration.py`. |
+| **Deselected from offline suite** | 13 | Deselected | 13 tests deselected during the offline suite execution; not failures. |
+| **Independently verified SQLite tests** | 7 | Passed | 7 pure SQLite database tests from the deselected group verified passing in a separate, independent run. |
+| **Unverified socket-dependent tests** | 6 | Unverified | Execution remained unverified due to local loopback socket restrictions in the Windows sandbox environment. |
+
+### Breakdown of the 6 unverified socket-dependent tests:
+- **5 HTTP API tests** in `tests/test_api.py`: Starlette `TestClient` setup was blocked because local loopback socket communication timed out in the sandbox environment before endpoint handlers were reached.
+- **1 socket regression test** in `tests/test_infra_socket_db_regression.py`: Loopback socketpair communication timed out in the restricted sandbox.
+
+### Strict reporting invariants:
+- **Unverified, not failed:** The 6 socket-dependent tests must not be categorized as test failures; they were blocked by environment-level socket restrictions during test runner setup.
+- **No composite totals:** The 571 offline suite passes and 7 independently verified SQLite passes derive from separate runs and must not be summed into an unverified composite total.
+- **No claim of 584 passes:** Do not claim that all 584 collected tests passed; the 6 socket-dependent tests remain unverified in the restricted environment.
+- **Environment requirement:** Rerun HTTP transport and socket tests in an environment that permits local loopback socket operations to verify end-to-end API transport behavior.
 
 ## Phase 1C verification evidence
 

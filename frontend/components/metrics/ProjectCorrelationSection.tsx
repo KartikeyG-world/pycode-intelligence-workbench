@@ -219,29 +219,6 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
     return activeDimension.pairs.length - chartPoints.length;
   }, [activeDimension, chartPoints]);
 
-  const handleTabKeyDown = (e: React.KeyboardEvent, currentIndex: number) => {
-    let nextIndex = currentIndex;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      e.preventDefault();
-      nextIndex = (currentIndex + 1) % dimensionKeys.length;
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      e.preventDefault();
-      nextIndex = (currentIndex - 1 + dimensionKeys.length) % dimensionKeys.length;
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      nextIndex = 0;
-    } else if (e.key === "End") {
-      e.preventDefault();
-      nextIndex = dimensionKeys.length - 1;
-    } else {
-      return;
-    }
-    const nextKey = dimensionKeys[nextIndex];
-    setSelectedDimensionKey(nextKey);
-    const tabEl = document.getElementById(`correlation-tab-${nextKey}`);
-    tabEl?.focus();
-  };
-
   // Fallback 1: Historical record where project_metrics was not calculated
   if (!hasProjectMetrics) {
     return (
@@ -383,12 +360,11 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
 
       {/* 2. Dimension Comparison Cards Grid */}
       <div
-        role="tablist"
-        aria-label="Correlation Dimensions"
-        aria-orientation="horizontal"
+        role="group"
+        aria-label="Correlation dimension selector"
         className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5"
       >
-        {dimensionKeys.map((key, index) => {
+        {dimensionKeys.map((key) => {
           const dim = dimensionsMap![key];
           const isSelected = key === activeDimensionKey;
           const meta = DIMENSION_METADATA[key] || {
@@ -402,16 +378,12 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
           return (
             <button
               key={key}
-              id={`correlation-tab-${key}`}
-              role="tab"
-              aria-selected={isSelected}
-              aria-controls={`correlation-tabpanel-${key}`}
-              tabIndex={isSelected ? 0 : -1}
+              type="button"
+              aria-pressed={isSelected}
               onClick={() => setSelectedDimensionKey(key)}
-              onKeyDown={(e) => handleTabKeyDown(e, index)}
               className={`p-3 rounded-xl border text-left transition-all duration-150 flex flex-col justify-between focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 cursor-pointer ${
                 isSelected
-                  ? "bg-zinc-800 border-emerald-500/50 shadow-md shadow-emerald-500/5"
+                  ? "bg-zinc-800 border-emerald-500/50 shadow-md shadow-emerald-500/5 ring-1 ring-emerald-500/30"
                   : "bg-zinc-900/60 border-zinc-800 hover:border-zinc-700/80 hover:bg-zinc-900/90"
               }`}
             >
@@ -471,12 +443,9 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
 
       {/* 3. Detailed Dimension Inspection & Scatter Plot Area */}
       {activeDimension && activeMeta && (
-        <div
-          role="tabpanel"
-          id={`correlation-tabpanel-${activeDimensionKey}`}
-          aria-labelledby={`correlation-tab-${activeDimensionKey}`}
-          tabIndex={0}
-          className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden shadow-xs focus:outline-hidden focus-visible:ring-1 focus-visible:ring-zinc-700"
+        <section
+          aria-label={`${activeMeta.label} detailed correlation analysis`}
+          className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden shadow-xs"
         >
           {/* Active Dimension Header */}
           <div className="p-4 bg-zinc-900/90 border-b border-zinc-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -643,7 +612,7 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
               </p>
             </div>
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

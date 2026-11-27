@@ -47,7 +47,7 @@ The current repository architecture does not implement authentication or authori
 - **Unauthenticated History Operations:** The endpoints `GET /api/history`, `GET /api/history/{submission_id}`, and `DELETE /api/history/{submission_id}` operate without authentication (`Depends(get_current_user)` is absent).
 - **No Ownership Enforcement:** Although `User` and `Project` database models exist in `backend/app/models/models.py`, the analysis and history routes do not bind submissions to authenticated user identities, nor do they verify project or record-level ownership.
 - **Unrestricted Access:** Any client with HTTP access to the backend can retrieve all historical analysis snippets, inspect full past analysis graphs, or delete past submissions.
-- **Deployment Guidance:** The application must not be exposed as a public or multi-tenant service in its current state. Multi-user deployments require an authenticating reverse proxy or application-tier access control layer.
+- **Deployment Guidance:** Do not expose the current history API to untrusted clients or operate it as a multi-user service in its present state. An authenticating reverse proxy can provide a perimeter access gate for a controlled single-tenant deployment, but it does not establish per-user data isolation. Multi-user deployments require application-enforced authentication and authorization that propagates a trusted user identity and enforces submission and project ownership on every relevant read and delete operation.
 
 ## Internal exception disclosure risks
 

@@ -92,7 +92,7 @@ The historical backend test verification on the accepted Unit 6 baseline collect
 
 ## Phase 1C verification evidence
 
-On development branch `feat/phase-1c-metrics-overview` at checkpoint `9f70e57624aca59017fc5b570e42c67340987260`, the following multi-layer quality gates were executed and verified:
+On development branch `feat/phase-1c-metrics-overview` (Phase 1C implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260`, Pre-remediation PR snapshot `d9753f4e79ed4d15069f13b1060ce151a82f99fb`), the following multi-layer quality gates were executed and verified:
 
 | Gate | Command | Result | Details |
 |---|---|---|---|

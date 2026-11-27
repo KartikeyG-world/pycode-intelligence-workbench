@@ -25,4 +25,4 @@ This directory contains version-controlled technical documentation. It is mainta
 
 ## Documentation baseline
 
-The technical documentation reflects the active development branch `feat/phase-1c-metrics-overview` at checkpoint commit `9f70e57624aca59017fc5b570e42c67340987260`. The merged backend baseline on GitHub `main` is commit `c26fdd36837bc0782c9e840b370f478e306857a2`, containing all six units of Phase 1B.2 (`64adf3d256f04ff43796b933875887b2f34d3179` via PR #26). Phase 1C Units 1–4 are fully implemented and verified on the active branch.
+The technical documentation reflects the active development branch `feat/phase-1c-metrics-overview` at Pre-remediation PR snapshot `d9753f4e79ed4d15069f13b1060ce151a82f99fb` (Phase 1C implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260`). The merged backend baseline on GitHub `main` is commit `c26fdd36837bc0782c9e840b370f478e306857a2`, containing all six units of Phase 1B.2 (`64adf3d256f04ff43796b933875887b2f34d3179` via PR #26). Phase 1C Units 1–4 are fully implemented and verified on the active branch.

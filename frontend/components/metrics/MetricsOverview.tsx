@@ -46,6 +46,7 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({ metrics }) => 
     average_halstead_volume,
     average_halstead_effort,
     halstead_volume_evaluated_scopes,
+    halstead_effort_evaluated_scopes,
     partial_coverage_volume_scopes,
     unclassified_syntax_scopes,
   } = metrics;
@@ -181,12 +182,17 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({ metrics }) => 
               </span>
               <Calculator className="w-3.5 h-3.5 text-cyan-400" />
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold font-mono text-cyan-400">
-                {formatFloat(average_halstead_volume, 1)}
-              </span>
-              <span className="text-[11px] text-zinc-500 font-sans">
-                avg volume (V)
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-bold font-mono text-cyan-400">
+                  {formatFloat(average_halstead_volume, 1)}
+                </span>
+                <span className="text-[11px] text-zinc-500 font-sans">
+                  avg volume (V)
+                </span>
+              </div>
+              <span className="text-[10px] text-zinc-500 font-mono shrink-0">
+                {halstead_volume_evaluated_scopes} eval
               </span>
             </div>
           </div>
@@ -198,7 +204,7 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({ metrics }) => 
                 {formatFloat(average_halstead_effort, 1)}
               </span>
               <span className="text-zinc-500 text-[9px] font-sans">
-                ({halstead_volume_evaluated_scopes} eval)
+                ({halstead_effort_evaluated_scopes} effort-eval)
               </span>
             </div>
           </div>

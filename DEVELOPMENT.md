@@ -160,7 +160,7 @@ When a test depends on local sockets, rerun it in a suitable environment that pe
 
 The public `main` branch baseline documented here is `c26fdd36837bc0782c9e840b370f478e306857a2`. All six units of Phase 1B.2 (including Unit 6 at `64adf3d256f04ff43796b933875887b2f34d3179`) are merged via PR #26. The unified metrics pipeline `metrics_pipeline.py` is integrated directly into `ComplexityAnalyzer.analyze()`, populating `scope_metrics` and `project_metrics`.
 
-On active branch `feat/phase-1c-metrics-overview` (HEAD: `9f70e57624aca59017fc5b570e42c67340987260`), Phase 1C Units 1–4 are fully implemented, delivering the integrated frontend dashboard (`MetricsOverview`, `ScopeMetricsTable`, `ScopeInspector`, `ProjectCorrelationSection`, and workspace UX refinements). See [Phase 1C Frontend Integration](docs/architecture/phase-1c-frontend-integration.md).
+On active branch `feat/phase-1c-metrics-overview` (Pre-remediation PR snapshot: `d9753f4e79ed4d15069f13b1060ce151a82f99fb`, Phase 1C implementation checkpoint: `9f70e57624aca59017fc5b570e42c67340987260`), Phase 1C Units 1–4 are fully implemented, delivering the integrated frontend dashboard (`MetricsOverview`, `ScopeMetricsTable`, `ScopeInspector`, `ProjectCorrelationSection`, and workspace UX refinements). See [Phase 1C Frontend Integration](docs/architecture/phase-1c-frontend-integration.md).
 
 ## 9. Static-analysis safety boundary
 

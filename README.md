@@ -1,132 +1,238 @@
 # Python Code Intelligence & Performance Workbench
 
-A static-analysis workbench for inspecting Python program structure and reasoning about algorithmic complexity without executing submitted source code.
+A deterministic static-analysis workbench for inspecting Python program structure, measuring AST structural metrics, cyclomatic complexity, and Halstead properties, and reasoning about algorithmic time/space complexity without executing submitted source code.
 
-> **Repository-state note (20 November 2026):** This documentation draft targets the published GitHub baseline `84ae1574d567160dcb70f56d6ba745424607dcd9` (Unit 5). The local Unit 6 commit `64adf3d256f04ff43796b933875887b2f34d3179` is not present on the GitHub remote yet. The Unit 6 unified metrics pipeline is therefore described as pending publication, not as part of the current public `main` branch.
+> **Development baseline:** Active branch `feat/phase-1c-metrics-overview` at Pre-remediation PR snapshot `d9753f4e79ed4d15069f13b1060ce151a82f99fb` (incorporating Phase 1C implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260` and subsequent documentation reconciliation). The merged upstream baseline on GitHub `main` is `c26fdd36837bc0782c9e840b370f478e306857a2`, containing all six units of Phase 1B.2 (`64adf3d256f04ff43796b933875887b2f34d3179` via PR #26). Phase 1C Units 1–4 are fully implemented, verified, and integrated into the frontend workspace.
 
-## What the workbench does
+---
 
-The currently published application accepts Python source, parses it into an Abstract Syntax Tree (AST), and performs static analysis to produce algorithmic time/space complexity reasoning and a structured analysis response. Its Phase 1A analysis includes function indexing, interprocedural call relationships, recursion/recurrence reasoning, loop analysis, operation-cost models and asymptotic cost composition.
+## What the Workbench Does
 
-The repository also contains a Control Flow Graph (CFG) builder and Phase 1B.2 metric components. Their presence in the source tree must be distinguished from integration into the current HTTP analysis path; see [Current capability status](#current-capability-status) and the [Phase 1B metrics status note](docs/architecture/phase-1b-metrics.md).
+The workbench accepts Python source code, safely parses it into an Abstract Syntax Tree (AST), and performs multi-level static analysis without code execution:
 
-## Current capability status
+1. **Algorithmic Complexity Reasoning (Phase 1A):** Indexes functions, traces interprocedural call graphs, models loops and recurrence relationships, and composes asymptotic time and space bounds ($O(1)$, $O(\log n)$, $O(n)$, $O(n \log n)$, $O(n^2)$, etc.).
+2. **Control Flow Graph & Cyclomatic Analysis (Phase 1B.1):** Builds basic-block control flow graphs for procedural scopes, evaluates graph cyclomatic complexity ($M_{\text{graph}} = E - N + 2P$) and decision cyclomatic complexity ($M_{\text{decision}} = 1 + \sum \pi_i$), analyzes reachability, and assigns risk ranks (A through F).
+3. **AST Structural & Halstead Analysis (Phase 1B.2):** Discovers canonical scopes in deterministic lexical preorder, counts structural AST nodes, statements, and control nesting depths, and compiles normalized operator/operand token inventories to evaluate Halstead vocabulary ($\eta$), length ($N$), volume ($V$), difficulty ($D$), and effort ($E$).
+4. **Project Correlation Analysis (Phase 1B.2):** Evaluates statistical co-variation (Pearson $r$ and Spearman $\rho$) between cyclomatic complexity and five key structural/Halstead dimensions across complete procedural scopes.
+5. **Interactive Analysis Workspace (Phase 1C):** Delivers a responsive, multi-viewport dashboard with project metrics overview cards, an interactive per-scope explorer table, a multi-tab detailed scope inspector, correlation scatter plots with tooltip scope enrichment, and interactive AST control flow graphs.
 
-Status below is evaluated against the published Unit 5 commit identified above.
+---
 
-| Capability | Published status | Notes |
+## Visual Preview
+
+### Analysis Workspace & Dual-Column Dashboard
+![Analysis Workspace Desktop](docs/assets/phase-1c/analysis-workspace-desktop.png)
+
+### Project Metric Correlations & Scatter Plot
+![Project Metric Correlations](docs/assets/phase-1c/metrics-and-correlations.png)
+
+### Detailed Scope Inspector (Halstead Science & Token Inventories)
+![Scope Inspector](docs/assets/phase-1c/scope-inspector.png)
+
+### Responsive Mobile Interface
+![Analysis Workspace Mobile](docs/assets/phase-1c/analysis-workspace-mobile.png)
+
+---
+
+## Current Capability Status
+
+Evaluated against active branch `feat/phase-1c-metrics-overview` (Pre-remediation PR snapshot: `d9753f4`, Phase 1C implementation checkpoint: `9f70e57`):
+
+| Capability | Status | Implementation Details |
 |---|---|---|
-| Safe Python AST parsing | Implemented | Static parsing with source-size, line-count, AST-node and AST-depth limits. |
-| Phase 1A complexity analysis | Implemented / API-integrated | Function indexing, call graph, loops, recursion/recurrences, operation-cost analysis and cost composition. |
-| CFG construction and cyclomatic analysis | Implemented as backend modules | CFG implementation and tests are present; the current `ComplexityAnalyzer` HTTP path does not invoke the CFG builder. |
-| Phase 1B.2 schemas and analyzer modules | Present in backend source | Scope discovery, structural metrics, Halstead metrics, correlation and project-summary modules exist. |
-| Unified Phase 1B.2 metrics pipeline | Pending publication | The local Unit 6 commit adds `metrics_pipeline.py` and wires it into `ComplexityAnalyzer`; that commit is not on GitHub as of this snapshot. |
-| Phase 1B.2 frontend visualization | Not implemented | The current frontend types and components do not render the new metrics. |
-| Runtime profiling / benchmarking | Not implemented | The application does not execute submitted code or measure runtime performance. |
-| Automatic source optimization / rewriting | Not implemented | Suggestions are rule-based text; no semantics-preserving rewrite engine is present. |
+| Safe Python AST parsing | Implemented | Strict static parsing with source-size (100KB), line-count (3,000), AST-node (10,000), and AST-depth (200) safety bounds. |
+| Phase 1A complexity analysis | Implemented & integrated | Function indexing, call graph construction, loop bounds, recurrence equation solving, operation-cost models, and asymptotic cost composition. |
+| CFG construction & cyclomatic analysis | Implemented & integrated | Basic-block CFG generation with reachable edge/node accounting, decision point categorization, discrepancy checks, and risk ranking. |
+| Phase 1B.2 unified metrics pipeline | Implemented & integrated | `UnifiedMetricsPipeline` coordinates scope discovery, structural metrics, Halstead analysis, procedural CFGs, correlation analysis, and project aggregation. |
+| Phase 1C frontend dashboard | Implemented & integrated | `MetricsOverview`, `ScopeMetricsTable`, `ScopeInspector`, `ProjectCorrelationSection`, and workspace UX refinements across 4 viewports. |
+| Analysis history persistence | Implemented (legacy fields) | Persists core complexity, legacy statistics, AST structure, and theoretical graph data to SQLite/PostgreSQL. Dynamic Phase 1B.2 metrics are not persisted. |
+| Runtime profiling / execution | Not implemented (by design) | Zero-execution static analysis boundary: submitted code is never executed; no runtime wall-clock benchmarks are generated. |
+| Automatic code rewriting | Not implemented | Optimization suggestions are static analytical hints; no semantic AST rewrite engine is present. |
 
-The published `AnalyzeResponse` schema includes `scope_metrics` and `project_metrics` fields. On the published Unit 5 baseline, the analyzer does not populate these fields; they retain their schema defaults (an empty scope list and a null project summary). Do not infer an integrated metrics API from schema-field presence alone.
+---
 
-## Architecture at a glance
+## Architecture at a Glance
 
 ```text
-Browser (Next.js / React)
-        |
-        | HTTP requests
-        v
-FastAPI routes (/api/analyze, /api/health, /api/history)
-        |
-        v
-AnalysisService
-        |
-        v
-SafeASTParser (ast.parse; no submitted-code execution)
-        |
-        v
-ComplexityAnalyzer (published Phase 1A request path)
-        |
-        +--> FunctionIndex / CallGraph / LoopAnalyzer
-        +--> RecursionAnalyzer / RecurrenceSolver
-        +--> OperationAnalyzer / CostComposer
-        +--> StructureAnalyzer
-        |
-        v
-AnalyzeResponse (Pydantic)
-        |
-        +--> optional persistence of the legacy analysis fields
+                  User / Browser
+                        |
+                        v
+              Next.js Frontend (Page / Monaco)
+                        |
+                        | POST /api/analyze
+                        v
+                 FastAPI Backend
+                        |
+                        v
+              Safe Static AST Parser (ast.parse)
+                        |
+                        v
+                 Scope Discovery (Lexical Preorder)
+                        |
+          +-------------+-------------+
+          |             |             |
+          v             v             v
+      Structural    Halstead       CFG /
+       Metrics       Metrics    Cyclomatic
+          |             |             |
+          +-------------+-------------+
+                        |
+                        v
+              Unified Metrics Pipeline
+                        |
+          +-------------+-------------+
+          |                           |
+          v                           v
+      Scope Metrics             Project Metrics
+   (UnifiedScopeMetrics[])   (ProjectMetricsSummary)
+          |                           |
+          +-------------+-------------+
+                        |
+                        v
+                 API Response (AnalyzeResponse)
+                        |
+                        v
+                 Next.js Frontend (React 19)
+                        |
+          +-------------+-------------+
+          |             |             |
+          v             v             v
+       Overview    Correlations    Scope Explorer
+  (MetricsOverview) (ProjectCorrelation) (ScopeMetricsTable)
+                                      |
+                                      v
+                                Scope Inspector
+                                (ScopeInspector)
 ```
 
-Additional CFG and Phase 1B.2 metric engines are available as backend modules, but the unified Unit 6 orchestration is pending publication at this baseline. Detailed ownership boundaries are in [System architecture](docs/architecture/system-overview.md).
+For complete architectural details, see [System Architecture Overview](docs/architecture/system-overview.md), [Phase 1B Metrics Contract](docs/architecture/phase-1b-metrics.md), and [Phase 1C Frontend Integration](docs/architecture/phase-1c-frontend-integration.md).
 
-## Technology stack
+---
+
+## Technology Stack
 
 ### Backend
-
-- Python `>=3.11` (declared in `backend/pyproject.toml`)
-- FastAPI and Uvicorn
-- Pydantic v2 and pydantic-settings
-- SQLAlchemy 2.x and Alembic
-- Psycopg 3 for PostgreSQL connectivity
-- Pytest and HTTPX in the development extra
-- `uv` with the checked-in lockfile
+- **Python `>=3.11`** (declared in `backend/pyproject.toml`)
+- **FastAPI** (`>=0.115.0`) & **Uvicorn** (`>=0.32.0`)
+- **Pydantic v2** (`>=2.9.0`) & **pydantic-settings** (`>=2.6.0`)
+- **SQLAlchemy 2.x** (`>=2.0.36`) & **Alembic** (`>=1.14.0`)
+- **Psycopg 3** (`>=3.2.0`) for PostgreSQL connectivity
+- **Pytest** (`>=8.3.0`) & **HTTPX** (`>=0.28.0`) for automated testing
+- **`uv`** package manager with checked-in `uv.lock`
 
 ### Frontend
-
-- Node.js `>=20`
-- Next.js 16 and React 19
-- TypeScript 5 and Tailwind CSS v4
-- Monaco Editor, React Flow, Recharts and Lucide React
+- **Node.js `>=20.0.0`** (declared in `frontend/package.json`)
+- **Next.js 16.3.6** (App Router, Turbopack dev, Webpack build) & **React 19.2.8**
+- **TypeScript 5** & **Tailwind CSS v4**
+- **Monaco Editor** (`@monaco-editor/react`) for code editing
+- **React Flow** (`@xyflow/react`) for interactive AST hierarchy diagrams
+- **Recharts** (`^3.10.1`) for theoretical asymptotic curves and correlation scatter plots
+- **Lucide React** for technical iconography
 
 ### Persistence
+- **SQLite Fallback:** Default local database (`sqlite+pysqlite:///./complexity.db`) created automatically via SQLAlchemy metadata.
+- **PostgreSQL:** Supported through SQLAlchemy connection strings configured in `DATABASE_URL`.
+- **Persistence Boundary:** Legacy complexity fields are stored in `AnalysisResult`; Phase 1B.2 scope and project metrics are dynamically computed per analysis and are not stored in historical tables.
 
-The backend defaults to SQLite when no database URL is supplied and supports PostgreSQL through the configured SQLAlchemy URL. The current persistence model stores the legacy analysis result fields; Phase 1B.2 metric persistence is not part of the accepted current contract.
+---
 
-## Local development
+## Local Development & Setup
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup and verification instructions.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for full developer instructions.
 
-### Backend
+### Prerequisites
+- Python `>=3.11`
+- Node.js `>=20`
+- `uv` (recommended for Python package management)
+- `npm`
+
+### 1. Backend Setup
 
 ```powershell
 cd backend
+
+# Create local environment configuration
+Copy-Item ..\.env.example .env
+
+# Install dependencies with dev extra
 uv sync --extra dev
+
+# Start FastAPI development server
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### Frontend
+Backend endpoints:
+- API Root: `http://127.0.0.1:8000/`
+- Interactive Swagger Docs: `http://127.0.0.1:8000/docs`
+- Static Analysis: `POST http://127.0.0.1:8000/api/analyze`
+- Service Health: `GET http://127.0.0.1:8000/api/health`
+- Analysis History: `GET http://127.0.0.1:8000/api/history`
+
+### 2. Frontend Setup
 
 ```powershell
 cd frontend
+
+# Install clean dependencies
 npm ci
+
+# Start Next.js development server
 npm run dev
 ```
 
-## HTTP API
+The frontend will be available at `http://localhost:3000`.
 
-The FastAPI application mounts the following routes under `/api`:
+---
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/api/analyze` | Analyze submitted Python source statically. |
-| `GET` | `/api/health` | Report service and database connectivity status. |
-| `GET` | `/api/history` | Retrieve recent persisted analysis records. |
-| `GET` | `/api/history/{submission_id}` | Retrieve a persisted analysis detail record. |
+## Verification & Quality Gates
 
-FastAPI's interactive API documentation is available at `/docs` when the backend is running. The endpoint contracts are defined by the route and Pydantic schema modules; do not treat live analysis responses and historical persistence responses as identical data models.
+The project maintains rigorous multi-layer quality gates across backend and frontend codebases:
 
-For history endpoint behavior, response schemas, persistence lifecycle, and known limitations, see [Analysis History API](docs/api/ANALYSIS_HISTORY_API.md).
+### Frontend Verification
 
-## Static-analysis and security boundary
+```powershell
+cd frontend
 
-Submitted Python is parsed into AST data and analyzed without being executed. The parser enforces a 100,000-byte source limit, a 3,000-line limit, a 10,000-node AST limit and a depth limit of 200. The AST node/depth checks run after `ast.parse` has produced the tree; they do not eliminate all resource risks inside the interpreter's parsing stage. Deployments that accept hostile input should use process/container isolation and operating-system resource limits in addition to application-level checks.
+# 1. ESLint check
+npm run lint
 
-Static results are not runtime measurements. The workbench does not provide measured execution time, actual peak memory, dynamic branch coverage or proof that a statically represented path is feasible for a particular input.
+# 2. TypeScript typecheck
+npx tsc --noEmit
 
-See [SECURITY.md](SECURITY.md) for the security boundary and disclosure guidance.
+# 3. Next.js production Webpack build
+npm run build
+```
 
-## License
+### Backend Verification
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for the complete license text.
+```powershell
+cd backend
+
+# Run metrics pipeline integration suite
+uv run pytest tests/test_metrics_pipeline_integration.py -v
+
+# Run full offline test suite
+uv run pytest tests/ -v
+```
+
+---
+
+## Static-Analysis & Security Boundary
+
+1. **Zero Execution of Submitted Code:** Submitted Python source code is parsed exclusively into syntax tree data via `ast.parse` and statically analyzed. It is never executed via `eval`, `exec`, or dynamic worker subprocesses.
+2. **Parser Resource Guardrails:**
+   - Maximum source length: **100,000 bytes**
+   - Maximum lines of code: **3,000 lines**
+   - Maximum AST nodes: **10,000 nodes**
+   - Maximum AST nesting depth: **200 levels**
+   *Note:* Node count and depth checks run post-parse; environments exposed to untrusted input should enforce process memory limits and operating system sandboxing.
+3. **Static Limitations:** Static analysis produces algorithmic estimations and structural metrics. It does not measure wall-clock execution time, actual peak resident memory, or dynamic path feasibility for specific runtime inputs.
+4. **Halstead Model Transparency:** Theoretical time ($T = E / 18$) and estimated delivered bugs ($B = V / 3000$) are model-derived formulas based on AST token counts, not empirical benchmarks or verified defects.
+5. **Statistical Correlation Boundaries:** Pearson ($r$) and Spearman ($\rho$) correlation coefficients indicate descriptive co-variation across evaluated procedural scopes; they do not establish causation or runtime prediction.
+
+See [SECURITY.md](SECURITY.md) for full vulnerability reporting and security boundaries.
+
+---
 
 ## Winter of Code Social (WOCS) 2026
 
@@ -139,31 +245,39 @@ External contributors, student developers, and open-source participants are welc
 3. **Request Issue Assignment:** Leave a comment on the relevant issue expressing interest and outlining your proposed technical approach.
 4. **Wait for Formal Assignment:** **Do not begin work or submit a pull request until a Project Admin or Mentor explicitly assigns the issue to you.** Unassigned pull requests will be closed.
 5. **Follow the Code of Conduct:** All participants must abide by the project's [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) across all discussions and reviews.
-6. **Join Community Discussions:** Connect with maintainers and participants in the **[Code Social Discord Server](https://discord.gg/MSTNyRSPYW)**. (A dedicated project forum channel will be created and shared by the Project Admin).
+6. **Join Community Discussions:** Connect with maintainers and participants in the **[Code Social Discord Server](https://discord.gg/MSTNyRSPYW)**.
 
-## Documentation map
+---
 
-- [Development and operations](DEVELOPMENT.md)
-- [Contribution workflow](CONTRIBUTING.md)
+## Documentation Map
+
+- [Development and Operations Guide](DEVELOPMENT.md)
+- [Technical Documentation Index](docs/README.md)
+- [System Architecture Overview](docs/architecture/system-overview.md)
+- [Phase 1B Metric Contracts & Specifications](docs/architecture/phase-1b-metrics.md)
+- [Phase 1C Frontend Metrics Integration](docs/architecture/phase-1c-frontend-integration.md)
+- [Analysis History API Specification](docs/api/ANALYSIS_HISTORY_API.md)
+- [Testing Strategy & Evidence Guidelines](docs/development/testing.md)
+- [Contribution Guidelines](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security policy](SECURITY.md)
-- [Project license](LICENSE)
-- [Documentation index](docs/README.md)
-- [System architecture](docs/architecture/system-overview.md)
-- [Phase 1B metric contracts and integration status](docs/architecture/phase-1b-metrics.md)
-- [Test strategy and verification](docs/development/testing.md)
+- [Security Policy](SECURITY.md)
+- [Project License](LICENSE)
 
-## Known documentation and integration gaps
+---
 
-1. The runtime default `PROJECT_NAME` in `backend/app/core/config.py` and `.env.example` still uses the legacy name `Code Complexity Visualizer`; this is a configuration-alignment item, not a claim that the runtime title has already been changed.
-2. The Phase 1B.2 unified pipeline exists in a local Unit 6 commit but has not been published to GitHub at the snapshot recorded here.
-3. The frontend does not yet expose Phase 1B/1B.2 metrics.
-4. HTTP `TestClient` execution was blocked by loopback socket setup failures in the reported Windows sandbox. API transport verification must be repeated in an environment that supports the required local sockets.
-5. Test totals reported in the source audit did not reconcile arithmetically. This documentation intentionally does not publish an aggregate test count.
+## Known Documentation and Integration Gaps
 
-## Repository baseline
+1. The runtime default `PROJECT_NAME` in `backend/app/core/config.py` and `.env.example` uses the legacy name `Code Complexity Visualizer`; this is an intentional configuration-alignment item, not a claim that the runtime title has been modified.
+2. In restricted Windows sandboxes lacking loopback socket permissions, Starlette `TestClient` tests may fail during socketpair creation. API transport verification must be executed in an environment permitting local loopback sockets.
+3. Historical analysis records created under the Stage 1.0.2 schema do not persist Phase 1B.2 scope or project metrics; historical views display explicit missing-data state indicators.
 
-- Repository: `KartikeyG-world/pycode-intelligence-workbench`
-- Published branch baseline: `main` at `84ae1574d567160dcb70f56d6ba745424607dcd9`
-- Local Unit 6 checkpoint pending publication: `64adf3d256f04ff43796b933875887b2f34d3179`
-- Documentation snapshot date: 20 November 2026
+---
+
+## Repository Baseline
+
+- **Repository:** `KartikeyG-world/pycode-intelligence-workbench`
+- **Active Development Branch:** `feat/phase-1c-metrics-overview`
+- **Current Pre-remediation PR snapshot:** `d9753f4e79ed4d15069f13b1060ce151a82f99fb`
+- **Phase 1C Implementation Checkpoint:** `9f70e57624aca59017fc5b570e42c67340987260`
+- **Upstream Main Baseline:** `c26fdd36837bc0782c9e840b370f478e306857a2`
+- **Merged Phase 1B.2 Checkpoint:** `64adf3d256f04ff43796b933875887b2f34d3179` (PR #26)

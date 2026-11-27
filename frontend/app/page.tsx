@@ -4,6 +4,9 @@ import React, { useState, useEffect } from "react";
 import { CodeEditor } from "@/components/CodeEditor";
 import { ComplexityOverview } from "@/components/ComplexityOverview";
 import { StatisticsGrid } from "@/components/StatisticsGrid";
+import { MetricsOverview } from "@/components/metrics/MetricsOverview";
+import { ProjectCorrelationSection } from "@/components/metrics/ProjectCorrelationSection";
+import { ScopeMetricsTable } from "@/components/metrics/ScopeMetricsTable";
 import { ComplexityChart } from "@/components/ComplexityChart";
 import { StructureFlow } from "@/components/StructureFlow";
 import { ReasoningPanel } from "@/components/ReasoningPanel";
@@ -79,6 +82,12 @@ export default function Home() {
     }
   };
 
+  const handleReset = () => {
+    setCode("");
+    setAnalysisResult(null);
+    setErrorMessage(null);
+  };
+
   const handleSelectExample = (example: CodeExample) => {
     setCode(example.code);
     setErrorMessage(null);
@@ -130,18 +139,19 @@ export default function Home() {
       {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Monaco Code Editor */}
-        <section className="lg:col-span-5 flex flex-col h-[750px] lg:h-auto">
+        <section className="lg:col-span-5 flex flex-col lg:sticky lg:top-20 lg:h-[calc(100vh-6rem)] h-[550px] sm:h-[650px]">
           <CodeEditor
             code={code}
             onChange={setCode}
             onAnalyze={handleAnalyze}
+            onReset={handleReset}
             isLoading={isLoading}
             onSelectExample={handleSelectExample}
           />
         </section>
 
         {/* Right Column: Visual Complexity Dashboard */}
-        <section className="lg:col-span-7 flex flex-col space-y-4">
+        <section className="lg:col-span-7 flex flex-col space-y-5">
           {/* Syntax Error Alert */}
           {errorMessage && (
             <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-3 shadow-lg">
@@ -247,7 +257,16 @@ export default function Home() {
               {/* 2. Analysis Statistics */}
               <StatisticsGrid stats={analysisResult.statistics} />
 
-              {/* 3. Deep Dive Visualizations (Chart vs React Flow Graph) */}
+              {/* 3. Phase 1B.2 Project Metrics & Correlations */}
+              <MetricsOverview metrics={analysisResult.project_metrics} />
+              <ProjectCorrelationSection
+                correlation={analysisResult.project_metrics?.correlation}
+                hasProjectMetrics={Boolean(analysisResult.project_metrics)}
+                scopes={analysisResult.scope_metrics}
+              />
+              <ScopeMetricsTable scopes={analysisResult.scope_metrics} />
+
+              {/* 4. Deep Dive Visualizations (Chart vs React Flow Graph) */}
               <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl overflow-hidden">
                 {/* Visualizer Tabs Header */}
                 <div className="flex items-center justify-between px-4 py-2 bg-zinc-900/90 border-b border-zinc-800">

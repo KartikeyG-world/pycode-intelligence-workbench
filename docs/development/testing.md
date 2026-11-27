@@ -6,9 +6,9 @@ A passing test result is meaningful only when tied to the source revision and ex
 
 Do not publish an aggregate test total unless the complete suite was collected on one exact commit, every reported category is mutually exclusive or clearly accounted for, and the arithmetic reconciles.
 
-## Backend test modules on published Unit 5
+## Backend test modules on published baseline
 
-The public Unit 5 commit `84ae1574d567160dcb70f56d6ba745424607dcd9` contains these test modules:
+The public `main` commit `c26fdd36837bc0782c9e840b370f478e306857a2` contains these test modules:
 
 | Area | Test module |
 |---|---|
@@ -21,7 +21,9 @@ The public Unit 5 commit `84ae1574d567160dcb70f56d6ba745424607dcd9` contains the
 | Halstead | `test_halstead_metrics.py` |
 | Socket/database infrastructure | `test_infra_socket_db_regression.py` |
 | Interprocedural analysis | `test_interprocedural.py` |
+| Metrics pipeline integration | `test_metrics_pipeline_integration.py` |
 | Metrics schemas | `test_metrics_schemas.py` |
+| Persistence failure reporting | `test_persistence_reporting.py` |
 | Phase 1A.1 verification | `test_phase1a12_final_verification.py` |
 | Phase 1A.1.3 semantics closure | `test_phase1a13_semantics_closure.py` |
 | Phase 1A.1 correctness | `test_phase1a1_correctness.py` |
@@ -67,9 +69,39 @@ The read-only source audit reported the following limitation in its Windows sand
 
 These are reported historical observations, not a promise that the same result will occur on another machine or commit. Re-run transport tests where local loopback sockets are permitted, and preserve the actual exception/exit status.
 
-## Test-count reconciliation warning
+## Test-count reconciliation
 
-The source audit provided 15 per-module test counts whose arithmetic sum is 534, while its stated subtotal was 495. A separate earlier Unit 6 report described 584 collected, 13 deselected and 571 offline passes, plus a separate 37-test pipeline integration module. These reports do not establish one reconciled aggregate. This documentation intentionally publishes no total test count.
+The historical backend test verification on the accepted Unit 6 baseline collected 584 total tests and established four distinct categories of verification outcomes:
+
+| Category | Count | Status | Description |
+|---|---|---|---|
+| **Offline suite passed** | 571 | Passed | 534 tests across 15 offline modules plus 37 integration tests in `test_metrics_pipeline_integration.py`. |
+| **Deselected from offline suite** | 13 | Deselected | 13 tests deselected during the offline suite execution; not failures. |
+| **Independently verified SQLite tests** | 7 | Passed | 7 pure SQLite database tests from the deselected group verified passing in a separate, independent run. |
+| **Unverified socket-dependent tests** | 6 | Unverified | Execution remained unverified due to local loopback socket restrictions in the Windows sandbox environment. |
+
+### Breakdown of the 6 unverified socket-dependent tests:
+- **5 HTTP API tests** in `tests/test_api.py`: Starlette `TestClient` setup was blocked because local loopback socket communication timed out in the sandbox environment before endpoint handlers were reached.
+- **1 socket regression test** in `tests/test_infra_socket_db_regression.py`: Loopback socketpair communication timed out in the restricted sandbox.
+
+### Strict reporting invariants:
+- **Unverified, not failed:** The 6 socket-dependent tests must not be categorized as test failures; they were blocked by environment-level socket restrictions during test runner setup.
+- **No composite totals:** The 571 offline suite passes and 7 independently verified SQLite passes derive from separate runs and must not be summed into an unverified composite total.
+- **No claim of 584 passes:** Do not claim that all 584 collected tests passed; the 6 socket-dependent tests remain unverified in the restricted environment.
+- **Environment requirement:** Rerun HTTP transport and socket tests in an environment that permits local loopback socket operations to verify end-to-end API transport behavior.
+
+## Phase 1C verification evidence
+
+On development branch `feat/phase-1c-metrics-overview` (Phase 1C implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260`, Pre-remediation PR snapshot `d9753f4e79ed4d15069f13b1060ce151a82f99fb`), the following multi-layer quality gates were executed and verified:
+
+| Gate | Command | Result | Details |
+|---|---|---|---|
+| Git Diff Whitespace | `git diff --check` | Passed | 0 whitespace or formatting errors |
+| TypeScript Compiler | `npx tsc --noEmit` | Passed | Version 5.9.3, 0 errors, exit code 0 |
+| ESLint | `npm run lint` | Passed | ESLint completed with 0 errors or warnings, exit code 0 |
+| Production Build | `npm run build` | Passed | Next.js 16.3.6 (Webpack) compiled in 4.8s; static pages generated |
+| Backend Pipeline Integration | `pytest tests/test_metrics_pipeline_integration.py` | Passed | 37 passed in 0.41s |
+| Runtime Smoke Test | Browser automated inspection | Passed | All 4 target viewports (1440×900, 1280×800, 768×1024, 390×844) verified; 14 after screenshots |
 
 ## Required evidence in PRs
 

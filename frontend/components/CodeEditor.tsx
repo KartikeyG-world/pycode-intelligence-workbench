@@ -9,6 +9,7 @@ interface CodeEditorProps {
   code: string;
   onChange: (value: string) => void;
   onAnalyze: () => void;
+  onReset?: () => void;
   isLoading: boolean;
   onSelectExample: (example: CodeExample) => void;
 }
@@ -17,6 +18,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   code,
   onChange,
   onAnalyze,
+  onReset,
   isLoading,
   onSelectExample,
 }) => {
@@ -33,6 +35,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   const handleReset = () => {
     onChange("");
+    onReset?.();
     if (editorRef.current) {
       editorRef.current.focus();
     }

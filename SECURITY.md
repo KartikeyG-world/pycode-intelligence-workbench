@@ -40,6 +40,27 @@ For deployments that accept untrusted or hostile source, use defense in depth:
 - Keep runtime execution of submitted code disabled.
 - Monitor resource exhaustion and worker restarts.
 
+## Authentication and history authorization boundaries
+
+The current repository architecture does not implement authentication or authorization:
+
+- **Unauthenticated History Operations:** The endpoints `GET /api/history`, `GET /api/history/{submission_id}`, and `DELETE /api/history/{submission_id}` operate without authentication (`Depends(get_current_user)` is absent).
+- **No Ownership Enforcement:** Although `User` and `Project` database models exist in `backend/app/models/models.py`, the analysis and history routes do not bind submissions to authenticated user identities, nor do they verify project or record-level ownership.
+- **Unrestricted Access:** Any client with HTTP access to the backend can retrieve all historical analysis snippets, inspect full past analysis graphs, or delete past submissions.
+- **Deployment Guidance:** The application must not be exposed as a public or multi-tenant service in its current state. Multi-user deployments require an authenticating reverse proxy or application-tier access control layer.
+
+## Internal exception disclosure risks
+
+- **Analysis Endpoint:** In `backend/app/api/routes/analyze.py`, unexpected errors during analysis return raw exception messages directly to the client (`detail=f"...: {str(e)}"` with HTTP 500).
+- **Health Check Endpoint:** In `backend/app/api/routes/health.py`, database connection errors return unredacted driver exceptions via `database.error` in the JSON response payload.
+- **Risk Assessment:** These exception strings can disclose internal library versions, host paths, or database connectivity specifics to unauthenticated callers. Sanitization is tracked for Phase 1D remediation.
+
+## Database deployment and migration boundaries
+
+- **SQLite Schema Provisioning:** When using SQLite local fallback (`DATABASE_URL` starts with `sqlite`), `backend/app/main.py` executes `Base.metadata.create_all(bind=engine)` automatically during application lifespan startup.
+- **PostgreSQL Migration Barrier:** When targeting PostgreSQL, automatic schema creation is not performed. While Alembic migration scripts exist under `backend/alembic/versions/`, the repository currently does not include a published `alembic.ini` configuration file. Direct execution of `alembic upgrade head` is blocked unless `alembic.ini` is manually provided.
+- **Process Isolation:** The application does not enforce OS containerization or process sandboxing internally; deployment configurations must supply external containment boundaries.
+
 ## Static-analysis limitations
 
 The application does not measure actual execution time, peak runtime memory, dynamic branch coverage or input-specific path execution. Static CFG reachability describes the analyzer's graph model; it is not evidence that a path executes for a given input. Correlation outputs are descriptive and do not prove causality or predict runtime performance.
@@ -62,4 +83,4 @@ Allow maintainers a reasonable opportunity to investigate and coordinate a fix b
 
 ## Scope and source references
 
-This policy reflects the source inspected at published Unit 5 commit `84ae1574d567160dcb70f56d6ba745424607dcd9`, particularly `backend/app/analyzers/ast_parser.py`, `backend/app/core/config.py` and the analysis service. Reassess it when parser behavior, deployment isolation or the product execution boundary changes.
+This policy reflects the source inspected on canonical `main` at merge commit `e298ebba14b69a5c494e4b07308d3bd40aae1cd5` (post-Phase 1C integration), particularly `backend/app/analyzers/ast_parser.py`, `backend/app/core/config.py` and the analysis service. Reassess it when parser behavior, deployment isolation or the product execution boundary changes.

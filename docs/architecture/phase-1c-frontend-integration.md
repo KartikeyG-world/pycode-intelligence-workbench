@@ -1,10 +1,12 @@
 # Phase 1C Frontend Metrics Integration Architecture
 
 **Phase:** Phase 1C — Frontend Metrics Integration
-**Development Branch:** `feat/phase-1c-metrics-overview`
-**Pre-remediation PR snapshot:** `d9753f4e79ed4d15069f13b1060ce151a82f99fb`
+**Status:** Completed and merged
+**Pull Request:** #27
+**Merge Commit:** `e298ebba14b69a5c494e4b07308d3bd40aae1cd5` (`main`)
+**Feature Branch Final Commit:** `d6160f1983183273f20f29fc0af960236ac20984`
 **Phase 1C Implementation Checkpoint:** `9f70e57624aca59017fc5b570e42c67340987260`
-**Backend Baseline Checkpoint:** `64adf3d256f04ff43796b933875887b2f34d3179` (merged into `main` via PR #26)  
+**Previous Backend Baseline:** `c26fdd36837bc0782c9e840b370f478e306857a2` (Phase 1B.2 Unit 6 at `64adf3d256f04ff43796b933875887b2f34d3179` via PR #26)
 **Parent Documentation:** [System Architecture Overview](system-overview.md) | [Phase 1B Metrics Contract](phase-1b-metrics.md)
 
 ---

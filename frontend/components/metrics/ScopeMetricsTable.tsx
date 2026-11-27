@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import { UnifiedScopeMetrics } from "@/types/analysis";
+import { ScopeInspector } from "./ScopeInspector";
 import {
   ArrowUpDown,
   RotateCcw,
@@ -9,6 +10,8 @@ import {
 
 interface ScopeMetricsTableProps {
   scopes: UnifiedScopeMetrics[] | null | undefined;
+  selectedScopeId?: string | null;
+  onSelectScope?: (scope: UnifiedScopeMetrics | null) => void;
 }
 
 type SortField =
@@ -38,10 +41,33 @@ function formatInt(val: number | null | undefined): string {
   return val.toLocaleString("en-US");
 }
 
-export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) => {
+export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({
+  scopes,
+  selectedScopeId: controlledSelectedScopeId,
+  onSelectScope,
+}) => {
   const [sortField, setSortField] = useState<SortField>("canonical");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
-  const [selectedScopeId, setSelectedScopeId] = useState<string | null>(null);
+  const [internalSelectedScopeId, setInternalSelectedScopeId] = useState<string | null>(null);
+
+  const selectedScopeId =
+    controlledSelectedScopeId !== undefined
+      ? controlledSelectedScopeId
+      : internalSelectedScopeId;
+
+  // Derive selected scope directly from current scopes (clears automatically if scope no longer exists)
+  const selectedScope = useMemo(() => {
+    if (!selectedScopeId || !scopes) return null;
+    return scopes.find((s) => s.scope_id === selectedScopeId) ?? null;
+  }, [scopes, selectedScopeId]);
+
+  const effectiveSelectedScopeId = selectedScope?.scope_id ?? null;
+
+  const handleRowClick = (scope: UnifiedScopeMetrics) => {
+    const nextId = effectiveSelectedScopeId === scope.scope_id ? null : scope.scope_id;
+    setInternalSelectedScopeId(nextId);
+    onSelectScope?.(nextId ? scope : null);
+  };
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -172,9 +198,14 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
       {/* Table Header and Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
         <div>
-          <h3 className="text-sm font-semibold text-zinc-100 tracking-tight">
-            Per-Scope Metrics Explorer
-          </h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-zinc-100 tracking-tight">
+              Per-Scope Metrics Explorer
+            </h3>
+            <span className="text-[10px] text-zinc-500 font-sans">
+              (click row to inspect)
+            </span>
+          </div>
           <p className="text-[11px] text-zinc-400 mt-0.5">
             Deterministic scope inventory preserving canonical source order and AST boundaries.
           </p>
@@ -199,13 +230,14 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
         </div>
       </div>
 
-      {/* Main Table Container */}
+      {/* Main Table Container with optimized column widths & mobile sticky first column */}
       <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-zinc-800 bg-zinc-900/90 text-zinc-400 text-[10px] uppercase tracking-wider font-semibold">
-                <th className="py-2.5 px-3 min-w-[200px]">
+              <tr className="border-b border-zinc-800 bg-zinc-900 text-zinc-400 text-[10px] uppercase tracking-wider font-semibold">
+                {/* 1. Scope Identifier - Sticky Column */}
+                <th className="py-2.5 px-2.5 min-w-[170px] sticky left-0 z-20 bg-zinc-900 border-r border-zinc-800/80 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.6)]">
                   <button
                     onClick={() => handleSort("name")}
                     className="flex items-center gap-1 hover:text-zinc-200 transition"
@@ -214,7 +246,9 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-2 text-center min-w-[80px]">
+
+                {/* 2. Scope Type */}
+                <th className="py-2.5 px-1.5 text-center min-w-[65px]">
                   <button
                     onClick={() => handleSort("scope_type")}
                     className="flex items-center gap-1 mx-auto hover:text-zinc-200 transition"
@@ -223,7 +257,9 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-2 text-center min-w-[65px]">
+
+                {/* 3. Lines */}
+                <th className="py-2.5 px-1.5 text-center min-w-[60px]">
                   <button
                     onClick={() => handleSort("lineno")}
                     className="flex items-center gap-1 mx-auto hover:text-zinc-200 transition"
@@ -232,7 +268,9 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-3 text-right min-w-[110px]">
+
+                {/* 4. Cyclomatic Complexity */}
+                <th className="py-2.5 px-2 text-right min-w-[95px]">
                   <button
                     onClick={() => handleSort("cyclomatic")}
                     className="flex items-center gap-1 ml-auto hover:text-zinc-200 transition"
@@ -241,7 +279,9 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-2 text-right min-w-[70px]">
+
+                {/* 5. Statement Count */}
+                <th className="py-2.5 px-1.5 text-right min-w-[55px]">
                   <button
                     onClick={() => handleSort("statements")}
                     className="flex items-center gap-1 ml-auto hover:text-zinc-200 transition"
@@ -250,7 +290,9 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-2 text-right min-w-[65px]">
+
+                {/* 6. AST Depth */}
+                <th className="py-2.5 px-1.5 text-right min-w-[50px]">
                   <button
                     onClick={() => handleSort("depth")}
                     className="flex items-center gap-1 ml-auto hover:text-zinc-200 transition"
@@ -259,10 +301,14 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-2 text-right min-w-[65px]">
+
+                {/* 7. Control Nesting */}
+                <th className="py-2.5 px-1.5 text-right min-w-[50px]">
                   <span>Nesting</span>
                 </th>
-                <th className="py-2.5 px-3 text-right min-w-[90px]">
+
+                {/* 8. Halstead Volume */}
+                <th className="py-2.5 px-2 text-right min-w-[75px]">
                   <button
                     onClick={() => handleSort("volume")}
                     className="flex items-center gap-1 ml-auto hover:text-zinc-200 transition"
@@ -271,10 +317,14 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-2 text-right min-w-[80px]">
+
+                {/* 9. Halstead Difficulty */}
+                <th className="py-2.5 px-1.5 text-right min-w-[70px]">
                   <span>Difficulty (D)</span>
                 </th>
-                <th className="py-2.5 px-3 text-right min-w-[90px]">
+
+                {/* 10. Halstead Effort */}
+                <th className="py-2.5 px-2 text-right min-w-[75px]">
                   <button
                     onClick={() => handleSort("effort")}
                     className="flex items-center gap-1 ml-auto hover:text-zinc-200 transition"
@@ -283,14 +333,16 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                     <ArrowUpDown className="w-3 h-3 text-zinc-500" />
                   </button>
                 </th>
-                <th className="py-2.5 px-3 text-center min-w-[85px]">
+
+                {/* 11. Syntax Coverage */}
+                <th className="py-2.5 px-2 text-center min-w-[75px]">
                   <span>Coverage</span>
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60 font-mono">
               {sortedScopes.map((scope) => {
-                const isSelected = selectedScopeId === scope.scope_id;
+                const isSelected = effectiveSelectedScopeId === scope.scope_id;
                 const cyclo = scope.cyclomatic;
                 const struct = scope.structural;
                 const hal = scope.halstead;
@@ -305,29 +357,46 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                 return (
                   <tr
                     key={scope.scope_id}
-                    onClick={() =>
-                      setSelectedScopeId(isSelected ? null : scope.scope_id)
-                    }
-                    className={`cursor-pointer transition-colors ${
+                    tabIndex={0}
+                    role="row"
+                    aria-selected={isSelected}
+                    onClick={() => handleRowClick(scope)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleRowClick(scope);
+                      }
+                    }}
+                    className={`group cursor-pointer transition-colors focus:outline-hidden focus:ring-1 focus:ring-emerald-500/50 ${
                       isSelected
-                        ? "bg-zinc-800/60"
-                        : "hover:bg-zinc-800/30 bg-zinc-950/20"
+                        ? "bg-zinc-800/80 border-l-2 border-emerald-400"
+                        : "hover:bg-zinc-800/40 bg-zinc-950/20 border-l-2 border-transparent"
                     }`}
                   >
-                    {/* Scope Name and Identifier */}
-                    <td className="py-2 px-3">
+                    {/* 1. Scope Name and Identifier - Sticky Column */}
+                    <td
+                      className={`py-2 px-2.5 sticky left-0 z-10 border-r border-zinc-800/80 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.6)] transition-colors ${
+                        isSelected
+                          ? "bg-zinc-800"
+                          : "bg-zinc-900 group-hover:bg-zinc-800"
+                      }`}
+                    >
                       <div className="flex flex-col">
-                        <span className="font-semibold text-zinc-100 font-sans text-xs flex items-center gap-1.5">
+                        <span
+                          className={`font-semibold font-sans text-xs flex items-center gap-1.5 ${
+                            isSelected ? "text-emerald-300" : "text-zinc-100"
+                          }`}
+                        >
                           {scope.name}
                         </span>
-                        <span className="text-[10px] text-zinc-500 truncate max-w-[240px]">
+                        <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">
                           {scope.scope_id}
                         </span>
                       </div>
                     </td>
 
-                    {/* Scope Type */}
-                    <td className="py-2 px-2 text-center">
+                    {/* 2. Scope Type */}
+                    <td className="py-2 px-1.5 text-center">
                       <span
                         className={`inline-block px-1.5 py-0.5 rounded text-[10px] border font-sans font-medium uppercase tracking-wider ${getScopeTypeBadge(
                           scope.scope_type
@@ -337,13 +406,13 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                       </span>
                     </td>
 
-                    {/* Source Line Span */}
-                    <td className="py-2 px-2 text-center text-[11px] text-zinc-400">
+                    {/* 3. Source Line Span */}
+                    <td className="py-2 px-1.5 text-center text-[11px] text-zinc-400">
                       {lineSpan}
                     </td>
 
-                    {/* Cyclomatic Complexity */}
-                    <td className="py-2 px-3 text-right">
+                    {/* 4. Cyclomatic Complexity */}
+                    <td className="py-2 px-2 text-right">
                       {cyclo.cyclomatic_status === "COMPLETE" ? (
                         <div className="flex items-center justify-end gap-1.5">
                           {cyclo.is_provisional && (
@@ -371,38 +440,38 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
                       )}
                     </td>
 
-                    {/* Statements */}
-                    <td className="py-2 px-2 text-right text-zinc-300">
+                    {/* 5. Statements */}
+                    <td className="py-2 px-1.5 text-right text-zinc-300">
                       {formatInt(struct.statement_count)}
                     </td>
 
-                    {/* AST Depth */}
-                    <td className="py-2 px-2 text-right text-zinc-400">
+                    {/* 6. AST Depth */}
+                    <td className="py-2 px-1.5 text-right text-zinc-400">
                       {struct.ast_depth}
                     </td>
 
-                    {/* Nesting Depth */}
-                    <td className="py-2 px-2 text-right text-zinc-400">
+                    {/* 7. Nesting Depth */}
+                    <td className="py-2 px-1.5 text-right text-zinc-400">
                       {struct.control_nesting_depth}
                     </td>
 
-                    {/* Halstead Volume */}
-                    <td className="py-2 px-3 text-right text-cyan-300">
+                    {/* 8. Halstead Volume */}
+                    <td className="py-2 px-2 text-right text-cyan-300">
                       {formatFloat(hal.volume, 1)}
                     </td>
 
-                    {/* Halstead Difficulty */}
-                    <td className="py-2 px-2 text-right text-zinc-300">
+                    {/* 9. Halstead Difficulty */}
+                    <td className="py-2 px-1.5 text-right text-zinc-300">
                       {formatFloat(hal.difficulty, 1)}
                     </td>
 
-                    {/* Halstead Effort */}
-                    <td className="py-2 px-3 text-right text-zinc-300">
+                    {/* 10. Halstead Effort */}
+                    <td className="py-2 px-2 text-right text-zinc-300">
                       {formatFloat(hal.effort, 1)}
                     </td>
 
-                    {/* Halstead Syntax Coverage */}
-                    <td className="py-2 px-3 text-center">
+                    {/* 11. Halstead Syntax Coverage */}
+                    <td className="py-2 px-2 text-center">
                       <span
                         className={`inline-block px-1.5 py-0.5 rounded text-[9px] border font-sans font-medium uppercase tracking-wider ${getCoverageBadge(
                           hal.syntax_coverage_status
@@ -420,6 +489,17 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({ scopes }) 
           </table>
         </div>
       </div>
+
+      {/* 3. Detailed Scope Inspector */}
+      {selectedScope && (
+        <ScopeInspector
+          scope={selectedScope}
+          onClose={() => {
+            setInternalSelectedScopeId(null);
+            onSelectScope?.(null);
+          }}
+        />
+      )}
     </div>
   );
 };

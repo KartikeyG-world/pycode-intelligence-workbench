@@ -158,9 +158,9 @@ When a test depends on local sockets, rerun it in a suitable environment that pe
 
 ## 8. Published architecture status
 
-The public `main` branch baseline documented here is `c26fdd36837bc0782c9e840b370f478e306857a2`. All six units of Phase 1B.2 (including Unit 6 at `64adf3d256f04ff43796b933875887b2f34d3179`) are merged via PR #26. The unified metrics pipeline `metrics_pipeline.py` is integrated directly into `ComplexityAnalyzer.analyze()`, populating `scope_metrics` and `project_metrics`.
+The canonical repository baseline on `main` is `e298ebba14b69a5c494e4b07308d3bd40aae1cd5`, integrating Phase 1C Frontend Metrics Integration via PR #27 (feature branch `feat/phase-1c-metrics-overview` final commit `d6160f1983183273f20f29fc0af960236ac20984`, with implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260`). All four units of Phase 1C are fully integrated into the frontend workspace (`MetricsOverview`, `ScopeMetricsTable`, `ScopeInspector`, `ProjectCorrelationSection`, and responsive workspace refinements). See [Phase 1C Frontend Integration](docs/architecture/phase-1c-frontend-integration.md).
 
-On active branch `feat/phase-1c-metrics-overview` (Pre-remediation PR snapshot: `d9753f4e79ed4d15069f13b1060ce151a82f99fb`, Phase 1C implementation checkpoint: `9f70e57624aca59017fc5b570e42c67340987260`), Phase 1C Units 1–4 are fully implemented, delivering the integrated frontend dashboard (`MetricsOverview`, `ScopeMetricsTable`, `ScopeInspector`, `ProjectCorrelationSection`, and workspace UX refinements). See [Phase 1C Frontend Integration](docs/architecture/phase-1c-frontend-integration.md).
+The previous backend baseline on `main` was `c26fdd36837bc0782c9e840b370f478e306857a2`. All six units of Phase 1B.2 (including Unit 6 at `64adf3d256f04ff43796b933875887b2f34d3179`) were merged via PR #26. The unified metrics pipeline `metrics_pipeline.py` is integrated directly into `ComplexityAnalyzer.analyze()`, populating `scope_metrics` and `project_metrics`.
 
 ## 9. Static-analysis safety boundary
 

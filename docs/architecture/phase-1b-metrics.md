@@ -1,8 +1,8 @@
 # Phase 1B Metrics: Contracts and Integration Status
 
 **Specification family:** Stage 0.7 metric contract and Stage 1.0.2 architecture contract.  
-**Published source baseline:** `main`, `c26fdd36837bc0782c9e840b370f478e306857a2`.
-**Merged integration checkpoint:** Unit 6, `64adf3d256f04ff43796b933875887b2f34d3179` (merged via PR #26).
+**Canonical repository baseline:** `main`, `e298ebba14b69a5c494e4b07308d3bd40aae1cd5` (post-Phase 1C PR #27 integration).
+**Phase 1B.2 merged integration baseline:** `main`, `c26fdd36837bc0782c9e840b370f478e306857a2` (Unit 6, `64adf3d256f04ff43796b933875887b2f34d3179` via PR #26).
 
 ## 1. Phase 1B.2 completion and integration status
 
@@ -29,7 +29,7 @@ The unified metrics pipeline (`backend/app/analyzers/metrics_pipeline.py`) coord
 | Project metrics aggregation | `backend/app/analyzers/project_summary.py` | Implemented & merged |
 | Unified metrics orchestration | `backend/app/analyzers/metrics_pipeline.py` | Implemented & merged |
 | Phase 1B.2 API response population | `backend/app/analyzers/complexity_analyzer.py` | Integrated & merged |
-| Phase 1C frontend visualization | `frontend/components/metrics/`, `frontend/types/` | Implemented (Phase 1C Units 1–4; see [Phase 1C Guide](phase-1c-frontend-integration.md)) |
+| Phase 1C frontend visualization | `frontend/components/metrics/`, `frontend/types/` | Implemented & merged (Phase 1C Units 1–4 via PR #27; see [Phase 1C Guide](phase-1c-frontend-integration.md)) |
 
 ## 3. Canonical scope contract
 
@@ -144,7 +144,7 @@ Do not add project-wide sums of Halstead vocabulary/length, weighted Halstead to
 
 Under Stage 1.0.2, Phase 1B.2 `scope_metrics` and `project_metrics` are computed dynamically and are not persisted in the existing `analysis_results` table. Historical retrieval therefore does not provide those fields from stored records. Any persistence change requires an explicit architecture decision and migration plan.
 
-Frontend integration is completed across Phase 1C Units 1–4 on the `feat/phase-1c-metrics-overview` development branch:
+Frontend integration is completed across Phase 1C Units 1–4 and merged into `main` via PR #27:
 - Unit 1: `MetricsOverview` and `ScopeMetricsTable`
 - Unit 2: `ScopeInspector`
 - Unit 3: `ProjectCorrelationSection`

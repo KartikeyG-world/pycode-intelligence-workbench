@@ -2,7 +2,7 @@
 
 A deterministic static-analysis workbench for inspecting Python program structure, measuring AST structural metrics, cyclomatic complexity, and Halstead properties, and reasoning about algorithmic time/space complexity without executing submitted source code.
 
-> **Development baseline:** Active branch `feat/phase-1c-metrics-overview` at Pre-remediation PR snapshot `d9753f4e79ed4d15069f13b1060ce151a82f99fb` (incorporating Phase 1C implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260` and subsequent documentation reconciliation). The merged upstream baseline on GitHub `main` is `c26fdd36837bc0782c9e840b370f478e306857a2`, containing all six units of Phase 1B.2 (`64adf3d256f04ff43796b933875887b2f34d3179` via PR #26). Phase 1C Units 1–4 are fully implemented, verified, and integrated into the frontend workspace.
+> **Development baseline:** Canonical repository baseline on `main` at merge commit `e298ebba14b69a5c494e4b07308d3bd40aae1cd5`, integrating Phase 1C Frontend Metrics Integration via PR #27 (feature branch `feat/phase-1c-metrics-overview` at final commit `d6160f1983183273f20f29fc0af960236ac20984`, incorporating implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260` and remediation `d6160f1`). The previous backend baseline on `main` was `c26fdd36837bc0782c9e840b370f478e306857a2` (PR #26, Phase 1B.2 Unit 6 at `64adf3d256f04ff43796b933875887b2f34d3179`). Phase 1C Units 1–4 are fully implemented, verified, and integrated into the frontend workspace.
 
 ---
 
@@ -36,7 +36,7 @@ The workbench accepts Python source code, safely parses it into an Abstract Synt
 
 ## Current Capability Status
 
-Evaluated against active branch `feat/phase-1c-metrics-overview` (Pre-remediation PR snapshot: `d9753f4`, Phase 1C implementation checkpoint: `9f70e57`):
+Evaluated against canonical `main` at merge commit `e298ebb` (Phase 1C completed and merged via PR #27):
 
 | Capability | Status | Implementation Details |
 |---|---|---|
@@ -276,8 +276,9 @@ External contributors, student developers, and open-source participants are welc
 ## Repository Baseline
 
 - **Repository:** `KartikeyG-world/pycode-intelligence-workbench`
-- **Active Development Branch:** `feat/phase-1c-metrics-overview`
-- **Current Pre-remediation PR snapshot:** `d9753f4e79ed4d15069f13b1060ce151a82f99fb`
+- **Active Branch:** `main`
+- **Canonical Merged Baseline:** `e298ebba14b69a5c494e4b07308d3bd40aae1cd5` (PR #27 merge commit)
+- **Merged Feature Branch:** `feat/phase-1c-metrics-overview` (final commit `d6160f1983183273f20f29fc0af960236ac20984`)
 - **Phase 1C Implementation Checkpoint:** `9f70e57624aca59017fc5b570e42c67340987260`
-- **Upstream Main Baseline:** `c26fdd36837bc0782c9e840b370f478e306857a2`
+- **Previous Upstream Main Baseline:** `c26fdd36837bc0782c9e840b370f478e306857a2`
 - **Merged Phase 1B.2 Checkpoint:** `64adf3d256f04ff43796b933875887b2f34d3179` (PR #26)

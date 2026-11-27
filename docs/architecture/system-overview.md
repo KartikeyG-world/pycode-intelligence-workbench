@@ -1,7 +1,7 @@
 # System Architecture Overview
 
-**Verified source baseline:** `feat/phase-1c-metrics-overview`, Pre-remediation PR snapshot `d9753f4e79ed4d15069f13b1060ce151a82f99fb` (Phase 1C implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260`).
-**Merged backend baseline:** public `main`, commit `c26fdd36837bc0782c9e840b370f478e306857a2`.
+**Canonical repository baseline:** `main`, merge commit `e298ebba14b69a5c494e4b07308d3bd40aae1cd5` (integrating Phase 1C via PR #27; feature branch final commit `d6160f1983183273f20f29fc0af960236ac20984`, implementation checkpoint `9f70e57624aca59017fc5b570e42c67340987260`).
+**Previous backend baseline:** public `main`, commit `c26fdd36837bc0782c9e840b370f478e306857a2` (Phase 1B.2 Unit 6 at `64adf3d256f04ff43796b933875887b2f34d3179` via PR #26).
 
 ---
 

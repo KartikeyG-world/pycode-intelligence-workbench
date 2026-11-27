@@ -48,13 +48,25 @@ frontend/
 
 ---
 
+## Prerequisites & Installation
+
+- **Node.js:** Requires Node.js `>=20.0.0` (as defined in `package.json` engines).
+- **Package Installation:** Use `npm ci` for deterministic clean installation of locked dependencies:
+
+```bash
+cd frontend
+npm ci
+```
+
+---
+
 ## Available Scripts
 
 From the `frontend/` directory:
 
 | Script | Command | Purpose |
 |---|---|---|
-| `dev` | `npm run dev` | Start Next.js development server (Turbopack) on `http://localhost:3000` |
+| `dev` | `npm run dev` | Start Next.js development server on `http://localhost:3000` |
 | `lint` | `npm run lint` | Run ESLint validation across all pages and components |
 | `typecheck` | `npx tsc --noEmit` | Execute TypeScript strict compiler validation without emitting files |
 | `build` | `npm run build` | Produce optimized Next.js production build (`next build --webpack`) |
@@ -62,12 +74,18 @@ From the `frontend/` directory:
 
 ---
 
-## Development & API Communication
+## Environment & API Configuration
 
-The frontend expects the backend FastAPI server to run at `http://127.0.0.1:8000`.
+The frontend communicates with the FastAPI backend over HTTP JSON APIs configured in `frontend/lib/api.ts`:
 
-- Static analysis requests are sent via `POST http://127.0.0.1:8000/api/analyze`.
-- Persisted history queries are sent via `GET http://127.0.0.1:8000/api/history`.
-- Health checks are verified via `GET http://127.0.0.1:8000/api/health`.
+- **Environment Variable:** `NEXT_PUBLIC_API_URL`
+- **Default Value:** `http://localhost:8000/api` (falls back automatically when unset)
+
+### Endpoint Routes
+
+- Static analysis: `POST ${NEXT_PUBLIC_API_URL}/analyze`
+- Persisted history list: `GET ${NEXT_PUBLIC_API_URL}/history`
+- History item detail: `GET ${NEXT_PUBLIC_API_URL}/history/:submissionId`
+- Backend health check: `GET ${NEXT_PUBLIC_API_URL}/health`
 
 For full end-to-end setup and operations, consult the root [DEVELOPMENT.md](../DEVELOPMENT.md).

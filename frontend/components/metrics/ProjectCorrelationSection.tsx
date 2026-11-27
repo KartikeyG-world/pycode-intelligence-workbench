@@ -30,6 +30,7 @@ import {
 
 interface ProjectCorrelationSectionProps {
   correlation: ProjectCorrelationReport | null | undefined;
+  hasProjectMetrics?: boolean;
   scopes?: UnifiedScopeMetrics[] | null | undefined;
 }
 
@@ -161,6 +162,7 @@ const CustomScatterTooltip: React.FC<CustomTooltipProps> = ({
 
 export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps> = ({
   correlation,
+  hasProjectMetrics = true,
   scopes,
 }) => {
   const dimensionsMap = correlation?.dimensions;
@@ -169,6 +171,13 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
   }, [dimensionsMap]);
 
   const [selectedDimensionKey, setSelectedDimensionKey] = useState<string | null>(null);
+  const [prevCorrelation, setPrevCorrelation] = useState<ProjectCorrelationReport | null | undefined>(correlation);
+
+  // Sync state with props: reset selection if correlation report instance changes
+  if (correlation !== prevCorrelation) {
+    setPrevCorrelation(correlation);
+    setSelectedDimensionKey(null);
+  }
 
   // Re-resolve active dimension selection safely if dimension list changes
   const activeDimensionKey = useMemo(() => {
@@ -195,7 +204,7 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
     return map;
   }, [scopes]);
 
-  // Validate chart data points (guarantee finite coordinates)
+  // Validate chart data points directly from activeDimension.pairs (guarantee finite coordinates)
   const chartPoints = useMemo(() => {
     if (!activeDimension?.pairs) return [];
     return activeDimension.pairs.filter(
@@ -205,22 +214,98 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
     );
   }, [activeDimension]);
 
-  // Missing data or unavailable correlation state
-  if (!correlation) {
+  const omittedCount = useMemo(() => {
+    if (!activeDimension?.pairs) return 0;
+    return activeDimension.pairs.length - chartPoints.length;
+  }, [activeDimension, chartPoints]);
+
+  const handleTabKeyDown = (e: React.KeyboardEvent, currentIndex: number) => {
+    let nextIndex = currentIndex;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault();
+      nextIndex = (currentIndex + 1) % dimensionKeys.length;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault();
+      nextIndex = (currentIndex - 1 + dimensionKeys.length) % dimensionKeys.length;
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      nextIndex = 0;
+    } else if (e.key === "End") {
+      e.preventDefault();
+      nextIndex = dimensionKeys.length - 1;
+    } else {
+      return;
+    }
+    const nextKey = dimensionKeys[nextIndex];
+    setSelectedDimensionKey(nextKey);
+    const tabEl = document.getElementById(`correlation-tab-${nextKey}`);
+    tabEl?.focus();
+  };
+
+  // Fallback 1: Historical record where project_metrics was not calculated
+  if (!hasProjectMetrics) {
     return (
-      <div className="p-4 bg-zinc-900/40 border border-zinc-800/80 rounded-xl text-center">
+      <div
+        role="region"
+        aria-label="Project Metric Correlations"
+        className="p-4 bg-zinc-900/40 border border-zinc-800/80 rounded-xl text-center space-y-1"
+      >
+        <div className="flex items-center justify-center gap-2 mb-0.5">
+          <h3 className="text-xs font-semibold text-zinc-300 font-sans">
+            Project Metric Correlations
+          </h3>
+          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700">
+            Historical Record
+          </span>
+        </div>
         <p className="text-xs text-zinc-500 font-mono">
-          Project correlation analysis is unavailable for this analysis run.
+          Correlation metrics are not available for this historical analysis record (predates Phase 1B.2 metrics integration).
         </p>
       </div>
     );
   }
 
+  // Fallback 2: Analysis run has project metrics but correlation is null/unavailable
+  if (!correlation) {
+    return (
+      <div
+        role="region"
+        aria-label="Project Metric Correlations"
+        className="p-4 bg-zinc-900/40 border border-zinc-800/80 rounded-xl text-center space-y-1"
+      >
+        <div className="flex items-center justify-center gap-2 mb-0.5">
+          <h3 className="text-xs font-semibold text-zinc-300 font-sans">
+            Project Metric Correlations
+          </h3>
+          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            Unavailable
+          </span>
+        </div>
+        <p className="text-xs text-zinc-500 font-mono">
+          Project correlation analysis is unavailable for this analysis record.
+        </p>
+      </div>
+    );
+  }
+
+  // Fallback 3: Correlation report is present, but contains no dimension entries
   if (dimensionKeys.length === 0) {
     return (
-      <div className="p-4 bg-zinc-900/40 border border-zinc-800/80 rounded-xl text-center">
+      <div
+        role="region"
+        aria-label="Project Metric Correlations"
+        className="p-4 bg-zinc-900/40 border border-zinc-800/80 rounded-xl text-center space-y-1"
+      >
+        <div className="flex items-center justify-center gap-2 mb-0.5">
+          <h3 className="text-xs font-semibold text-zinc-300 font-sans">
+            Project Metric Correlations
+          </h3>
+          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700">
+            0 Dimensions
+          </span>
+        </div>
         <p className="text-xs text-zinc-500 font-mono">
-          No correlation dimensions were returned for this submission.
+          The correlation report contains no evaluated metric dimensions.
         </p>
       </div>
     );
@@ -300,9 +385,10 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
       <div
         role="tablist"
         aria-label="Correlation Dimensions"
+        aria-orientation="horizontal"
         className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5"
       >
-        {dimensionKeys.map((key) => {
+        {dimensionKeys.map((key, index) => {
           const dim = dimensionsMap![key];
           const isSelected = key === activeDimensionKey;
           const meta = DIMENSION_METADATA[key] || {
@@ -316,11 +402,14 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
           return (
             <button
               key={key}
+              id={`correlation-tab-${key}`}
               role="tab"
               aria-selected={isSelected}
-              tabIndex={0}
+              aria-controls={`correlation-tabpanel-${key}`}
+              tabIndex={isSelected ? 0 : -1}
               onClick={() => setSelectedDimensionKey(key)}
-              className={`p-3 rounded-xl border text-left transition-all duration-150 flex flex-col justify-between focus:outline-hidden focus:ring-1 focus:ring-emerald-500/50 cursor-pointer ${
+              onKeyDown={(e) => handleTabKeyDown(e, index)}
+              className={`p-3 rounded-xl border text-left transition-all duration-150 flex flex-col justify-between focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 cursor-pointer ${
                 isSelected
                   ? "bg-zinc-800 border-emerald-500/50 shadow-md shadow-emerald-500/5"
                   : "bg-zinc-900/60 border-zinc-800 hover:border-zinc-700/80 hover:bg-zinc-900/90"
@@ -382,7 +471,13 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
 
       {/* 3. Detailed Dimension Inspection & Scatter Plot Area */}
       {activeDimension && activeMeta && (
-        <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden shadow-xs">
+        <div
+          role="tabpanel"
+          id={`correlation-tabpanel-${activeDimensionKey}`}
+          aria-labelledby={`correlation-tab-${activeDimensionKey}`}
+          tabIndex={0}
+          className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden shadow-xs focus:outline-hidden focus-visible:ring-1 focus-visible:ring-zinc-700"
+        >
           {/* Active Dimension Header */}
           <div className="p-4 bg-zinc-900/90 border-b border-zinc-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="space-y-0.5">
@@ -450,7 +545,16 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
                         name="Cyclomatic Complexity"
                         stroke="#71717a"
                         tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                        domain={["auto", "auto"]}
+                        domain={[
+                          (dataMin: number) =>
+                            Number.isFinite(dataMin)
+                              ? Math.max(0, Math.floor(dataMin - 1))
+                              : 0,
+                          (dataMax: number) =>
+                            Number.isFinite(dataMax)
+                              ? Math.ceil(dataMax + 1)
+                              : 5,
+                        ]}
                         label={{
                           value: "Cyclomatic Complexity (M)",
                           position: "insideBottom",
@@ -465,7 +569,16 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
                         name={activeMeta.yAxisLabel}
                         stroke="#71717a"
                         tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                        domain={["auto", "auto"]}
+                        domain={[
+                          (dataMin: number) =>
+                            Number.isFinite(dataMin)
+                              ? Math.max(0, Math.floor(dataMin - 1))
+                              : 0,
+                          (dataMax: number) =>
+                            Number.isFinite(dataMax)
+                              ? Math.ceil(dataMax + 1)
+                              : 5,
+                        ]}
                         label={{
                           value: activeMeta.yAxisLabel,
                           angle: -90,
@@ -496,8 +609,10 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
                 <div className="mt-2 flex flex-col sm:flex-row sm:items-center justify-between text-[11px] font-mono text-zinc-500 pt-2 border-t border-zinc-800/60 gap-1">
                   <span>
                     Plotting {chartPoints.length} observation{" "}
-                    {chartPoints.length === 1 ? "pair" : "pairs"} (Backend sample
-                    size: {activeDimension.sample_size})
+                    {chartPoints.length === 1 ? "pair" : "pairs"}
+                    {omittedCount > 0
+                      ? ` (${omittedCount} non-finite pair omitted);`
+                      : ";"} Backend sample size: {activeDimension.sample_size}
                   </span>
                   <span>Hover points for function &amp; line metadata</span>
                 </div>

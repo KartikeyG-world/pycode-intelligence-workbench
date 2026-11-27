@@ -252,12 +252,11 @@ export default function Home() {
 
               {/* 3. Phase 1B.2 Project Metrics & Correlations */}
               <MetricsOverview metrics={analysisResult.project_metrics} />
-              {analysisResult.project_metrics?.correlation && (
-                <ProjectCorrelationSection
-                  correlation={analysisResult.project_metrics.correlation}
-                  scopes={analysisResult.scope_metrics}
-                />
-              )}
+              <ProjectCorrelationSection
+                correlation={analysisResult.project_metrics?.correlation}
+                hasProjectMetrics={Boolean(analysisResult.project_metrics)}
+                scopes={analysisResult.scope_metrics}
+              />
               <ScopeMetricsTable scopes={analysisResult.scope_metrics} />
 
               {/* 4. Deep Dive Visualizations (Chart vs React Flow Graph) */}

@@ -60,7 +60,7 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({ metrics }) => 
               Project Metrics Overview
             </h3>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              Phase 1B.2
+              Static AST Metrics
             </span>
           </div>
           <p className="text-[11px] text-zinc-400 mt-0.5">

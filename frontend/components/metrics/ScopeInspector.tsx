@@ -240,7 +240,7 @@ export const ScopeInspector: React.FC<ScopeInspectorProps> = ({ scope, onClose }
               {formatInt(struct.statement_count)}
             </span>
             <span className="text-[11px] text-zinc-500 font-mono">
-              stmts / d={struct.ast_depth}
+              {struct.statement_count === 1 ? "stmt" : "stmts"} / d={struct.ast_depth}
             </span>
           </div>
         </div>
@@ -420,7 +420,7 @@ export const ScopeInspector: React.FC<ScopeInspectorProps> = ({ scope, onClose }
             <div className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-800/80">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-zinc-300">
-                  Decision Points Breakdown ({decisionPointEntries.length} types)
+                  Decision Points Breakdown ({decisionPointEntries.length} {decisionPointEntries.length === 1 ? "type" : "types"})
                 </span>
                 <span className="text-[11px] font-mono text-zinc-500">
                   Total: {decisionPointEntries.reduce((acc, curr) => acc + curr[1], 0)} points
@@ -634,27 +634,27 @@ export const ScopeInspector: React.FC<ScopeInspectorProps> = ({ scope, onClose }
                   Token Quantities & Vocabulary
                 </span>
                 <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between">
+                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between gap-2">
                     <span className="text-zinc-500">Distinct Operators (n₁):</span>
                     <span className="text-zinc-200 font-semibold">{formatInt(hal.distinct_operators)}</span>
                   </div>
-                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between">
+                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between gap-2">
                     <span className="text-zinc-500">Distinct Operands (n₂):</span>
                     <span className="text-zinc-200 font-semibold">{formatInt(hal.distinct_operands)}</span>
                   </div>
-                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between">
+                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between gap-2">
                     <span className="text-zinc-500">Total Operators (N₁):</span>
                     <span className="text-zinc-200 font-semibold">{formatInt(hal.total_operators)}</span>
                   </div>
-                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between">
+                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between gap-2">
                     <span className="text-zinc-500">Total Operands (N₂):</span>
                     <span className="text-zinc-200 font-semibold">{formatInt(hal.total_operands)}</span>
                   </div>
-                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between">
+                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between gap-2">
                     <span className="text-zinc-500">Vocabulary (η = n₁ + n₂):</span>
                     <span className="text-cyan-400 font-bold">{formatInt(hal.vocabulary)}</span>
                   </div>
-                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between">
+                  <div className="p-2 rounded bg-zinc-900/80 border border-zinc-800 flex justify-between gap-2">
                     <span className="text-zinc-500">Length (N = N₁ + N₂):</span>
                     <span className="text-zinc-100 font-bold">{formatInt(hal.length)}</span>
                   </div>

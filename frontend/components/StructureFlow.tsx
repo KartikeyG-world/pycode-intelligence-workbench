@@ -219,11 +219,13 @@ export const StructureFlow: React.FC<StructureFlowProps> = ({ structure }) => {
           maxZoom={1.5}
         >
           <Background color="#27272a" gap={16} size={1} />
-          <Controls className="!bg-zinc-800 !border-zinc-700 !fill-zinc-300" />
+          <Controls className="!bg-zinc-900 !border-zinc-700 [&>button]:!bg-zinc-800 [&>button]:!border-zinc-700 [&>button]:!fill-zinc-300 [&>button:hover]:!bg-zinc-700" />
           <MiniMap
             nodeColor="#3f3f46"
-            maskColor="rgba(0, 0, 0, 0.6)"
-            className="!bg-zinc-900 !border-zinc-800 rounded-lg"
+            maskColor="rgba(0, 0, 0, 0.7)"
+            className="!bg-zinc-900 !border-zinc-800 rounded-lg !w-24 !h-16 sm:!w-28 sm:!h-18"
+            zoomable
+            pannable
           />
         </ReactFlow>
       </div>

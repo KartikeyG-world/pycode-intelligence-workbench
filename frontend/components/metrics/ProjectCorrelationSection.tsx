@@ -301,19 +301,19 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
     switch (status) {
       case "DESCRIPTIVE_ONLY":
         return (
-          <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-medium uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-medium uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap shrink-0">
             Descriptive
           </span>
         );
       case "INSUFFICIENT_SAMPLE":
         return (
-          <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-medium uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20">
+          <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-medium uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20 whitespace-nowrap shrink-0">
             Sample n &lt; 3
           </span>
         );
       case "ZERO_VARIANCE":
         return (
-          <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-medium uppercase tracking-wider bg-purple-500/10 text-purple-400 border border-purple-500/20">
+          <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-medium uppercase tracking-wider bg-purple-500/10 text-purple-400 border border-purple-500/20 whitespace-nowrap shrink-0">
             Zero Variance
           </span>
         );
@@ -336,7 +336,7 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
               Project Metric Correlations
             </h3>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              Phase 1B.2
+              Correlation Analysis
             </span>
           </div>
           <p className="text-[11px] text-zinc-400 mt-0.5">
@@ -362,7 +362,7 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
       <div
         role="group"
         aria-label="Correlation dimension selector"
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5"
+        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2.5"
       >
         {dimensionKeys.map((key) => {
           const dim = dimensionsMap![key];
@@ -502,7 +502,7 @@ export const ProjectCorrelationSection: React.FC<ProjectCorrelationSectionProps>
                 <div className="h-72 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart
-                      margin={{ top: 15, right: 25, bottom: 25, left: 10 }}
+                      margin={{ top: 15, right: 25, bottom: 25, left: 18 }}
                     >
                       <CartesianGrid
                         strokeDasharray="3 3"

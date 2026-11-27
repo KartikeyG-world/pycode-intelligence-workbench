@@ -185,20 +185,20 @@ export const ComplexityOverview: React.FC<ComplexityOverviewProps> = ({
         </div>
         <div className="space-y-1.5 text-xs">
           {spaceBreakdown ? (
-            <div className="grid grid-cols-2 gap-x-2 gap-y-1 font-mono text-[11px] pt-1">
-              <div className="flex justify-between border-b border-zinc-800/80 pb-0.5">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px] pt-1">
+              <div className="flex justify-between items-center gap-1.5 border-b border-zinc-800/80 pb-0.5">
                 <span className="text-zinc-400">Auxiliary:</span>
                 <span className="text-zinc-200 font-semibold">{spaceBreakdown.auxiliary}</span>
               </div>
-              <div className="flex justify-between border-b border-zinc-800/80 pb-0.5">
+              <div className="flex justify-between items-center gap-1.5 border-b border-zinc-800/80 pb-0.5">
                 <span className="text-zinc-400">Stack:</span>
                 <span className="text-zinc-200 font-semibold">{spaceBreakdown.recursion_stack}</span>
               </div>
-              <div className="flex justify-between pt-0.5">
+              <div className="flex justify-between items-center gap-1.5 pt-0.5">
                 <span className="text-zinc-400">Output:</span>
                 <span className="text-zinc-200 font-semibold">{spaceBreakdown.output}</span>
               </div>
-              <div className="flex justify-between pt-0.5">
+              <div className="flex justify-between items-center gap-1.5 pt-0.5">
                 <span className="text-zinc-400">Retained:</span>
                 <span className="text-emerald-400 font-bold">{spaceBreakdown.total_retained}</span>
               </div>

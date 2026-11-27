@@ -232,12 +232,12 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({
 
       {/* Main Table Container with optimized column widths & mobile sticky first column */}
       <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden shadow-xs">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto [scrollbar-width:thin]">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-900 text-zinc-400 text-[10px] uppercase tracking-wider font-semibold">
                 {/* 1. Scope Identifier - Sticky Column */}
-                <th className="py-2.5 px-2.5 min-w-[170px] sticky left-0 z-20 bg-zinc-900 border-r border-zinc-800/80 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.6)]">
+                <th className="py-2.5 px-2.5 w-[170px] min-w-[170px] max-w-[170px] sticky left-0 z-20 bg-zinc-900 border-r border-zinc-700/80 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.6)]">
                   <button
                     onClick={() => handleSort("name")}
                     className="flex items-center gap-1 hover:text-zinc-200 transition"
@@ -304,7 +304,7 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({
 
                 {/* 7. Control Nesting */}
                 <th className="py-2.5 px-1.5 text-right min-w-[50px]">
-                  <span>Nesting</span>
+                  <span>Nesting Depth</span>
                 </th>
 
                 {/* 8. Halstead Volume */}
@@ -375,21 +375,21 @@ export const ScopeMetricsTable: React.FC<ScopeMetricsTableProps> = ({
                   >
                     {/* 1. Scope Name and Identifier - Sticky Column */}
                     <td
-                      className={`py-2 px-2.5 sticky left-0 z-10 border-r border-zinc-800/80 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.6)] transition-colors ${
+                      className={`py-2 px-2.5 w-[170px] min-w-[170px] max-w-[170px] sticky left-0 z-10 border-r border-zinc-700/80 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.6)] transition-colors ${
                         isSelected
                           ? "bg-zinc-800"
                           : "bg-zinc-900 group-hover:bg-zinc-800"
                       }`}
                     >
-                      <div className="flex flex-col">
+                      <div className="flex flex-col min-w-0">
                         <span
-                          className={`font-semibold font-sans text-xs flex items-center gap-1.5 ${
+                          className={`font-semibold font-sans text-xs truncate flex items-center gap-1.5 ${
                             isSelected ? "text-emerald-300" : "text-zinc-100"
                           }`}
                         >
                           {scope.name}
                         </span>
-                        <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">
+                        <span className="text-[10px] text-zinc-500 truncate">
                           {scope.scope_id}
                         </span>
                       </div>

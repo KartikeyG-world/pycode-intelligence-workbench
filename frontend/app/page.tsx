@@ -82,6 +82,12 @@ export default function Home() {
     }
   };
 
+  const handleReset = () => {
+    setCode("");
+    setAnalysisResult(null);
+    setErrorMessage(null);
+  };
+
   const handleSelectExample = (example: CodeExample) => {
     setCode(example.code);
     setErrorMessage(null);
@@ -133,18 +139,19 @@ export default function Home() {
       {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Monaco Code Editor */}
-        <section className="lg:col-span-5 flex flex-col h-[750px] lg:h-auto">
+        <section className="lg:col-span-5 flex flex-col lg:sticky lg:top-20 lg:h-[calc(100vh-6rem)] h-[550px] sm:h-[650px]">
           <CodeEditor
             code={code}
             onChange={setCode}
             onAnalyze={handleAnalyze}
+            onReset={handleReset}
             isLoading={isLoading}
             onSelectExample={handleSelectExample}
           />
         </section>
 
         {/* Right Column: Visual Complexity Dashboard */}
-        <section className="lg:col-span-7 flex flex-col space-y-4">
+        <section className="lg:col-span-7 flex flex-col space-y-5">
           {/* Syntax Error Alert */}
           {errorMessage && (
             <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-3 shadow-lg">

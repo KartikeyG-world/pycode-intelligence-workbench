@@ -4,13 +4,13 @@ from sqlalchemy import (
     Column,
     String,
     Text,
-    DateTime,
     ForeignKey,
     JSON,
     Integer,
 )
 from sqlalchemy.orm import relationship
 from app.db.database import Base
+from app.db.types import UTCTimestamp
 
 
 def generate_uuid() -> str:
@@ -26,7 +26,7 @@ class User(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     email = Column(String(255), unique=True, index=True, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=get_utc_now, nullable=False)
+    created_at = Column(UTCTimestamp(), default=get_utc_now, nullable=False)
 
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
 
@@ -38,8 +38,8 @@ class Project(Base):
     user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=get_utc_now, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=get_utc_now, onupdate=get_utc_now, nullable=False)
+    created_at = Column(UTCTimestamp(), default=get_utc_now, nullable=False)
+    updated_at = Column(UTCTimestamp(), default=get_utc_now, onupdate=get_utc_now, nullable=False)
 
     user = relationship("User", back_populates="projects")
     submissions = relationship("CodeSubmission", back_populates="project", cascade="all, delete-orphan")
@@ -52,7 +52,7 @@ class CodeSubmission(Base):
     project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
     title = Column(String(255), nullable=False, default="Untitled Snippet")
     code = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=get_utc_now, nullable=False)
+    created_at = Column(UTCTimestamp(), default=get_utc_now, nullable=False)
 
     project = relationship("Project", back_populates="submissions")
     analysis_results = relationship("AnalysisResult", back_populates="submission", cascade="all, delete-orphan")
@@ -77,6 +77,6 @@ class AnalysisResult(Base):
     detected_patterns = Column(JSON, nullable=False)
     optimization_suggestions = Column(JSON, nullable=False)
 
-    created_at = Column(DateTime(timezone=True), default=get_utc_now, nullable=False)
+    created_at = Column(UTCTimestamp(), default=get_utc_now, nullable=False)
 
     submission = relationship("CodeSubmission", back_populates="analysis_results")

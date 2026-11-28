@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,7 @@ from app.services.analysis_service import AnalysisService
 
 router = APIRouter(prefix="/analyze", tags=["Analysis"])
 analysis_service = AnalysisService()
+logger = logging.getLogger(__name__)
 
 
 @router.post("", response_model=AnalyzeResponse, summary="Analyze Python source code statically")
@@ -23,8 +26,9 @@ def analyze_code(
     try:
         result = analysis_service.analyze_code(payload, db=db)
         return result
-    except Exception as e:
+    except Exception:
+        logger.exception("Unexpected internal error during static analysis")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected internal error occurred during static analysis: {str(e)}"
+            detail="An unexpected internal error occurred during static analysis."
         )

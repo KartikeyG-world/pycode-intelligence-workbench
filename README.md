@@ -242,8 +242,8 @@ External contributors, student developers, and open-source participants are welc
 
 1. **Find Available Issues:** Browse open, unassigned tasks on the project's [GitHub Issues tracker](https://github.com/KartikeyG-world/pycode-intelligence-workbench/issues).
 2. **Review Contribution Standards:** Read the [CONTRIBUTING.md](CONTRIBUTING.md) guide for strict static-analysis invariants, branch naming conventions, and testing expectations.
-3. **Request Issue Assignment:** Leave a comment on the relevant issue expressing interest and outlining your proposed technical approach.
-4. **Wait for Formal Assignment:** **Do not begin work or submit a pull request until a Project Admin or Mentor explicitly assigns the issue to you.** Unassigned pull requests will be closed.
+3. **Request Issue Assignment:** Comment `/claim` or `/assign` on an eligible, unassigned WOCS issue along with a brief description of your proposed approach. Use `/status` on any issue to check current assignment availability.
+4. **Wait for Formal Assignment:** **Do not begin work or submit a pull request until the bot confirms your assignment and lists you as assignee.** Contributors may hold at most two active assigned WOCS issues concurrently. If you need to step down, comment `/unclaim`. Unassigned pull requests will be closed.
 5. **Follow the Code of Conduct:** All participants must abide by the project's [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) across all discussions and reviews.
 6. **Join Community Discussions:** Connect with maintainers and participants in the **[Code Social Discord Server](https://discord.gg/MSTNyRSPYW)**.
 
@@ -258,6 +258,7 @@ External contributors, student developers, and open-source participants are welc
 - [Phase 1C Frontend Metrics Integration](docs/architecture/phase-1c-frontend-integration.md)
 - [Analysis History API Specification](docs/api/ANALYSIS_HISTORY_API.md)
 - [Testing Strategy & Evidence Guidelines](docs/development/testing.md)
+- [Maintainer Automation & Governance](docs/automation/MAINTAINER_AUTOMATION.md)
 - [Contribution Guidelines](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security Policy](SECURITY.md)

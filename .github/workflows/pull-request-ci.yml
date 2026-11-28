@@ -1,0 +1,127 @@
+name: Pull Request CI
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  backend-test:
+    name: Backend Validation (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Install backend dependencies (locked)
+        working-directory: backend
+        run: uv sync --locked --extra dev
+
+      - name: Run backend pytest test suite
+        working-directory: backend
+        run: uv run pytest tests/ -v
+
+  frontend-check:
+    name: Frontend Validation (Lint, Typecheck, Build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install frontend dependencies (clean)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run TypeScript typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Run Next.js production build
+        working-directory: frontend
+        run: npm run build
+
+  automation-test:
+    name: Maintainer Automation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Run unit test suite
+        run: node --test .github/scripts-tests/*.test.mjs
+
+      - name: Run workflow security and pinning validation
+        run: node .github/scripts-tests/validate-workflows.mjs
+
+      - name: Install and run mandatory actionlint
+        run: |
+          set -euo pipefail
+          ACTIONLINT_VERSION="1.7.12"
+          ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          EXPECTED_SHA256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          URL="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${ARCHIVE}"
+
+          echo "Downloading actionlint v${ACTIONLINT_VERSION}..."
+          curl -sSLO "$URL"
+
+          echo "Verifying SHA-256 checksum..."
+          echo "${EXPECTED_SHA256}  ${ARCHIVE}" | sha256sum -c -
+
+          echo "Extracting actionlint binary..."
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$ARCHIVE" -C "$HOME/.local/bin" actionlint
+          rm "$ARCHIVE"
+          chmod +x "$HOME/.local/bin/actionlint"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "Verifying installed actionlint version:"
+          actionlint -version
+
+          echo "Executing mandatory actionlint workflow check..."
+          actionlint

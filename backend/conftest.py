@@ -54,6 +54,8 @@ if sys.platform == "win32" and _orig_fallback_socketpair is not None:
     socket._fallback_socketpair = _timeout_guarded_socketpair
     if getattr(socket, "socketpair", None) is _orig_fallback_socketpair:
         socket.socketpair = _timeout_guarded_socketpair
+else:
+    _timeout_guarded_socketpair = None
 
 
 def pytest_unconfigure(config):

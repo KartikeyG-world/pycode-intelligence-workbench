@@ -1,9 +1,14 @@
 import ast
+import sys
 import pytest
 from app.analyzers.complexity_analyzer import ComplexityAnalyzer
 from app.analyzers.ast_parser import SafeASTParser
 from app.schemas.analysis import AnalyzeResponse
 from app.analyzers.complexity_classes import ComplexityClass
+
+_requires_pep695 = pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="PEP 695 syntax requires Python 3.12+"
+)
 
 
 @pytest.fixture
@@ -1944,6 +1949,7 @@ def solve(n, shared):
     assert res.space_complexity == "O(n²)"
 
 
+@_requires_pep695
 def test_104_pep695_type_alias_shadows_builtin(analyzer: ComplexityAnalyzer):
     """Test 104: Python 3.12+ PEP 695 type alias statement `type len = int` acts as a name binding
     that shadows built-in len, conservatively treating len as potentially impure/escaping.

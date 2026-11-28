@@ -13,6 +13,7 @@ Covers all 37 acceptance points across Groups A through G:
 
 import ast
 import json
+import sys
 import pytest
 from unittest.mock import MagicMock
 
@@ -34,6 +35,10 @@ from app.schemas.metrics import (
 )
 from app.services.analysis_service import AnalysisService
 from app.models.models import AnalysisResult, CodeSubmission
+
+_requires_pep695 = pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="PEP 695 syntax requires Python 3.12+"
+)
 
 
 # ============================================================================
@@ -268,6 +273,7 @@ class TestGroupCStructuralAndHalsteadIntegration:
         assert fn_halstead.volume is not None
         assert fn_halstead.effort is not None
 
+    @_requires_pep695
     def test_case_13_generic_class_and_type_parameters_ownership(self, pipeline):
         """13. Generic class type parameters owned by enclosing module scope and excluded from body."""
         code = (

@@ -9,8 +9,31 @@
 import { parseCommand, extractLinkedIssueNumber } from './lib/command-parser.mjs';
 import * as templates from './lib/response-templates.mjs';
 
-const AUTHORIZED_ROLES = ['admin', 'maintain', 'write', 'triage'];
-const VALID_LEVELS = ['1', '2', '3'];
+export const DEFAULT_AUTHORIZED_ROLES = ['admin', 'maintain', 'write'];
+export const VALID_LEVELS = ['1', '2', '3'];
+
+/**
+ * Checks if a collaborator role is authorized to use maintainer /level commands.
+ * Default authorized roles: 'admin', 'maintain', 'write'.
+ * Triage privileges are not authorized by default and require explicit opt-in.
+ *
+ * @param {string} permission - Collaborator permission/role from GitHub API
+ * @param {object} [options]
+ * @param {string[]} [options.authorizedRoles] - Custom authorized roles list
+ * @param {boolean} [options.allowTriageRole] - Explicit toggle to permit triage role
+ * @returns {boolean}
+ */
+export function isAuthorizedMaintainerRole(permission, options = {}) {
+  const norm = (permission || '').toLowerCase();
+  const allowed = options.authorizedRoles || DEFAULT_AUTHORIZED_ROLES;
+  if (allowed.includes(norm)) {
+    return true;
+  }
+  if (norm === 'triage' && (options.allowTriageRole === true || process.env.ALLOW_TRIAGE_WOCS_LEVEL === 'true')) {
+    return true;
+  }
+  return false;
+}
 
 /**
  * Creates an authenticated GitHub REST API client using fetch.
@@ -166,7 +189,7 @@ export function createGitHubClient(token, repoFull, fetchFn = globalThis.fetch) 
  * @param {object} params.event - Webhook event payload
  * @returns {Promise<{ handled: boolean, action?: string, reason?: string }>}
  */
-export async function handleIssueComment({ client, event }) {
+export async function handleIssueComment({ client, event, options = {} }) {
   const { action, issue, comment } = event;
 
   // 1. Filter: Process only newly created comments
@@ -212,7 +235,7 @@ export async function handleIssueComment({ client, event }) {
     if (command === 'level') {
       // Module C: Maintainer-only WOCS level commands
       const userPermission = await client.getCollaboratorPermission(commentAuthor);
-      if (!AUTHORIZED_ROLES.includes(userPermission.toLowerCase())) {
+      if (!isAuthorizedMaintainerRole(userPermission, options)) {
         await client.createComment(issueNumber, templates.levelUnauthorized(commentAuthor));
         return { handled: true, action: 'level_unauthorized' };
       }

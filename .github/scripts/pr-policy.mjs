@@ -176,6 +176,54 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
   };
 }
 
+/**
+ * Evaluates PR policy using GitHub API client and event payload.
+ * Fails closed if fresh PR details cannot be retrieved.
+ *
+ * @param {object} params
+ * @param {object} params.client - GitHub API client
+ * @param {object} params.event - Event payload
+ * @param {number|string} [params.dispatchPrNumber] - Optional override PR number
+ * @returns {Promise<object>} Policy evaluation report
+ */
+export async function evaluatePullRequestWithApi({ client, event, dispatchPrNumber }) {
+  let pr = event?.pull_request;
+  const dispatchNum = dispatchPrNumber || event?.inputs?.pr_number;
+  if (!pr && dispatchNum) {
+    const num = parseInt(dispatchNum, 10);
+    if (isNaN(num)) {
+      throw new Error(`Invalid dispatch PR number: ${dispatchNum}`);
+    }
+    pr = await client.getPullRequest(num);
+  }
+
+  if (!pr) {
+    throw new Error('No pull_request found in event payload or workflow_dispatch inputs');
+  }
+
+  const prNumber = pr.number;
+  let freshPr;
+  try {
+    freshPr = await client.getPullRequest(prNumber);
+  } catch (err) {
+    throw new Error(`Failed to refresh PR #${prNumber} details via GitHub API: ${err.message}. Failing closed for policy integrity.`);
+  }
+
+  // Fetch linked issue if referenced
+  const linkedNum = extractLinkedIssueNumber(freshPr.body);
+  let linkedIssue = null;
+  if (linkedNum) {
+    try {
+      linkedIssue = await client.getIssue(linkedNum);
+    } catch {
+      linkedIssue = null;
+    }
+  }
+
+  const prLabels = (freshPr.labels || []).map(l => (typeof l === 'string' ? l : l.name));
+  return validatePullRequestPolicy({ pr: freshPr, linkedIssue, prLabels });
+}
+
 // CLI runner for GitHub Actions workflow
 if (process.env.GITHUB_EVENT_PATH && process.argv[1]?.endsWith('pr-policy.mjs')) {
   import('node:fs').then(async fs => {
@@ -192,46 +240,13 @@ if (process.env.GITHUB_EVENT_PATH && process.argv[1]?.endsWith('pr-policy.mjs'))
       }
 
       const client = createGitHubClient(token, repo);
+      const prNumber = event?.pull_request?.number || process.env.DISPATCH_PR_NUMBER || event?.inputs?.pr_number;
 
-      // Support pull_request_target event payload OR workflow_dispatch with DISPATCH_PR_NUMBER
-      let pr = event.pull_request;
-      const dispatchPrNum = process.env.DISPATCH_PR_NUMBER || event.inputs?.pr_number;
-      if (!pr && dispatchPrNum) {
-        const num = parseInt(dispatchPrNum, 10);
-        if (isNaN(num)) {
-          console.error(`Invalid dispatch PR number: ${dispatchPrNum}`);
-          process.exit(1);
-        }
-        pr = await client.getPullRequest(num);
-      }
-
-      if (!pr) {
-        console.error('No pull_request found in event payload or workflow_dispatch inputs');
-        process.exit(1);
-      }
-
-      // Fetch fresh PR details to ensure latest labels and association
-      const prNumber = pr.number;
-      let freshPr = pr;
-      try {
-        freshPr = await client.getPullRequest(prNumber);
-      } catch (err) {
-        console.warn(`Could not refresh PR #${prNumber} details (${err.message}), using event payload`);
-      }
-
-      // Fetch linked issue if referenced
-      const linkedNum = extractLinkedIssueNumber(freshPr.body);
-      let linkedIssue = null;
-      if (linkedNum) {
-        try {
-          linkedIssue = await client.getIssue(linkedNum);
-        } catch {
-          linkedIssue = null;
-        }
-      }
-
-      const prLabels = (freshPr.labels || []).map(l => (typeof l === 'string' ? l : l.name));
-      const report = validatePullRequestPolicy({ pr: freshPr, linkedIssue, prLabels });
+      const report = await evaluatePullRequestWithApi({
+        client,
+        event,
+        dispatchPrNumber: process.env.DISPATCH_PR_NUMBER
+      });
 
       console.log(`--- PULL REQUEST POLICY REPORT (PR #${prNumber}) ---`);
       if (report.isDraft) {
@@ -253,7 +268,7 @@ if (process.env.GITHUB_EVENT_PATH && process.argv[1]?.endsWith('pr-policy.mjs'))
       console.log('✅ All pull request policy checks PASSED.');
       process.exit(0);
     } catch (error) {
-      console.error('Fatal error during PR policy evaluation:', error);
+      console.error('Fatal error during PR policy evaluation:', error.message || error);
       process.exit(1);
     }
   });

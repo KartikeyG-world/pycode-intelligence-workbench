@@ -12,7 +12,7 @@ permissions:
   actions: write # Required for workflow_dispatch of pull-request-policy.yml after /level commands
 
 concurrency:
-  group: issue-commands-${{ github.event.issue.number }}
+  group: issue-commands-${{ github.repository }}
   queue: max
   cancel-in-progress: false
 

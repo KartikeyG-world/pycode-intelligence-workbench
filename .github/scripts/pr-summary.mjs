@@ -15,7 +15,8 @@ import { MARKERS } from './lib/response-templates.mjs';
 export const EXPECTED_JOBS = [
   'Backend Validation (Python 3.11)',
   'Backend Validation (Python 3.13)',
-  'Frontend Validation (Lint, Typecheck, Build)'
+  'Frontend Validation (Lint, Typecheck, Build)',
+  'Maintainer Automation Tests'
 ];
 
 export function formatStatus(conclusion) {
@@ -35,6 +36,7 @@ export function formatStatus(conclusion) {
 
 /**
  * Generates markdown summary body for CI status report.
+ * Strictly verifies that all expected jobs are present, unique, and succeeded.
  *
  * @param {object} params
  * @param {Array<{ name: string, conclusion: string, status?: string }>} [params.jobs]
@@ -67,10 +69,29 @@ export function generateCiSummaryComment({ jobs = [], runUrl, overallConclusion,
   const jobRows = jobs.map(j => `| ${j.name || 'Unknown Job'} | ${formatStatus(j.conclusion)} |`).join('\n');
 
   // Strict verification check:
-  // Must have overallConclusion === 'success', every job must be 'success', and jobs array must not be empty.
-  const hasExpectedJobs = jobs.some(j => EXPECTED_JOBS.includes(j.name));
-  const allJobsSucceeded = jobs.length > 0 && jobs.every(j => j.conclusion === 'success');
-  const isStrictSuccess = overallConclusion === 'success' && allJobsSucceeded && hasExpectedJobs;
+  // Every expected job must exist exactly once and have conclusion === 'success'
+  const jobCounts = new Map();
+  for (const job of jobs) {
+    const name = job?.name;
+    if (name) {
+      jobCounts.set(name, (jobCounts.get(name) || 0) + 1);
+    }
+  }
+
+  // Reject missing or duplicate expected jobs
+  const everyExpectedPresentOnce = EXPECTED_JOBS.every(name => jobCounts.get(name) === 1);
+
+  // Reject failed, cancelled, skipped, null conclusion, or unknown results
+  const allJobsValidSuccess = jobs.length > 0 && jobs.every(j => j.conclusion === 'success');
+  const allExpectedSucceeded = EXPECTED_JOBS.every(name => {
+    const matchingJobs = jobs.filter(j => j.name === name);
+    return matchingJobs.length === 1 && matchingJobs[0].conclusion === 'success';
+  });
+
+  const isStrictSuccess = overallConclusion === 'success' &&
+                          everyExpectedPresentOnce &&
+                          allExpectedSucceeded &&
+                          allJobsValidSuccess;
 
   return `${MARKERS.PR_CI_SUMMARY}
 ### 🤖 Pull Request CI Summary
@@ -152,69 +173,106 @@ export async function handleWorkflowRunCompleted({ client, event, fetchFn = glob
     errorMessage
   });
 
-  // 3. Search for existing bot-managed comment to update idempotently
+  // 3. Search for existing bot-managed comment across all pages with reliable pagination
   let existingCommentId = null;
-  try {
-    const commentsRes = await fetchFn(`https://api.github.com/repos/${client.owner}/${client.repo}/issues/${prNumber}/comments`, {
-      headers: {
-        'Accept': 'application/vnd.github+json',
-        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'pycode-maintainer-automation'
-      }
-    });
+  let page = 1;
+  const perPage = 100;
 
-    if (commentsRes.ok) {
-      const comments = await commentsRes.json();
-      if (Array.isArray(comments)) {
-        const existing = comments.find(c => c.body && c.body.includes(MARKERS.PR_CI_SUMMARY));
-        if (existing) {
-          existingCommentId = existing.id;
+  while (true) {
+    let commentsRes;
+    try {
+      commentsRes = await fetchFn(
+        `https://api.github.com/repos/${client.owner}/${client.repo}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`,
+        {
+          headers: {
+            'Accept': 'application/vnd.github+json',
+            'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'pycode-maintainer-automation'
+          }
         }
-      }
-    } else {
-      console.warn(`Could not list comments (HTTP ${commentsRes.status}), will attempt creating comment`);
+      );
+    } catch (err) {
+      throw new Error(`Failed to query issue comments for PR #${prNumber} on page ${page}: ${err.message}`);
     }
-  } catch (err) {
-    console.warn(`Error querying comments: ${err.message}`);
+
+    if (!commentsRes || !commentsRes.ok) {
+      const status = commentsRes?.status || 'unknown';
+      throw new Error(`Failed to list comments for PR #${prNumber} (HTTP ${status}): cannot safely determine existing summary status`);
+    }
+
+    let comments;
+    try {
+      comments = await commentsRes.json();
+    } catch (err) {
+      throw new Error(`Failed to parse comments JSON for PR #${prNumber} on page ${page}: ${err.message}`);
+    }
+
+    if (!Array.isArray(comments)) {
+      throw new Error(`Malformed comments payload for PR #${prNumber} on page ${page}`);
+    }
+
+    const existing = comments.find(c => c.body && c.body.includes(MARKERS.PR_CI_SUMMARY));
+    if (existing) {
+      existingCommentId = existing.id;
+      break;
+    }
+
+    if (comments.length < perPage) {
+      break;
+    }
+    page++;
   }
 
   if (existingCommentId) {
     // Update existing comment
-    const updateRes = await fetchFn(`https://api.github.com/repos/${client.owner}/${client.repo}/issues/comments/${existingCommentId}`, {
-      method: 'PATCH',
-      headers: {
-        'Accept': 'application/vnd.github+json',
-        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-        'Content-Type': 'application/json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'pycode-maintainer-automation'
-      },
-      body: JSON.stringify({ body: commentBody })
-    });
-
-    if (!updateRes.ok) {
-      throw new Error(`Failed to update PR summary comment #${existingCommentId}: HTTP ${updateRes.status}`);
+    let updateRes;
+    try {
+      updateRes = await fetchFn(`https://api.github.com/repos/${client.owner}/${client.repo}/issues/comments/${existingCommentId}`, {
+        method: 'PATCH',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+          'Content-Type': 'application/json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'pycode-maintainer-automation'
+        },
+        body: JSON.stringify({ body: commentBody })
+      });
+    } catch (err) {
+      throw new Error(`Failed to update PR summary comment #${existingCommentId}: ${err.message}`);
     }
-    return { handled: true, action: 'comment_updated', prNumber };
+
+    if (!updateRes || !updateRes.ok) {
+      const status = updateRes?.status || 'unknown';
+      throw new Error(`Failed to update PR summary comment #${existingCommentId}: HTTP ${status}`);
+    }
+    return { handled: true, action: 'comment_updated', prNumber, commentId: existingCommentId };
   } else {
     // Create new comment if none exists
-    const createRes = await fetchFn(`https://api.github.com/repos/${client.owner}/${client.repo}/issues/${prNumber}/comments`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/vnd.github+json',
-        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-        'Content-Type': 'application/json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'pycode-maintainer-automation'
-      },
-      body: JSON.stringify({ body: commentBody })
-    });
-
-    if (!createRes.ok) {
-      throw new Error(`Failed to create PR summary comment on #${prNumber}: HTTP ${createRes.status}`);
+    let createRes;
+    try {
+      createRes = await fetchFn(`https://api.github.com/repos/${client.owner}/${client.repo}/issues/${prNumber}/comments`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+          'Content-Type': 'application/json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'pycode-maintainer-automation'
+        },
+        body: JSON.stringify({ body: commentBody })
+      });
+    } catch (err) {
+      throw new Error(`Failed to create PR summary comment on #${prNumber}: ${err.message}`);
     }
-    return { handled: true, action: 'comment_created', prNumber };
+
+    if (!createRes || !createRes.ok) {
+      const status = createRes?.status || 'unknown';
+      throw new Error(`Failed to create PR summary comment on #${prNumber}: HTTP ${status}`);
+    }
+    const createdData = await createRes.json().catch(() => ({}));
+    return { handled: true, action: 'comment_created', prNumber, commentId: createdData?.id };
   }
 }
 

@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePullRequestPolicy } from '../scripts/pr-policy.mjs';
+import { validatePullRequestPolicy, evaluatePullRequestWithApi } from '../scripts/pr-policy.mjs';
 
 function makeValidPrBody({
   linkedIssue = '101',
@@ -441,5 +441,56 @@ describe('Owner-Authored Maintenance Exemption Tests (Section 5)', () => {
 
     assert.equal(result.valid, true);
     assert.deepEqual(result.errors, []);
+  });
+});
+
+describe('PR Policy API Evaluation & Fail-Closed Behavior', () => {
+  test('fails closed with a clear error when retrieving fresh PR details fails', async () => {
+    const client = {
+      async getPullRequest(prNumber) {
+        throw new Error('API Rate limit exceeded or network timeout (HTTP 429)');
+      },
+      async getIssue() {
+        return null;
+      }
+    };
+
+    const event = {
+      pull_request: {
+        number: 105,
+        body: 'Closes #101'
+      }
+    };
+
+    await assert.rejects(
+      async () => evaluatePullRequestWithApi({ client, event }),
+      /Failed to refresh PR #105 details via GitHub API: API Rate limit exceeded or network timeout \(HTTP 429\)\. Failing closed for policy integrity\./
+    );
+  });
+
+  test('succeeds when fresh PR details are retrieved and valid', async () => {
+    const pr = {
+      number: 105,
+      base: { ref: 'main' },
+      draft: false,
+      author_association: 'OWNER',
+      user: { login: 'repoOwner' },
+      labels: [],
+      body: makeValidPrBody({ linkedIssue: null })
+    };
+
+    const client = {
+      async getPullRequest(prNumber) {
+        return pr;
+      },
+      async getIssue() {
+        return null;
+      }
+    };
+
+    const event = { pull_request: { number: 105 } };
+    const report = await evaluatePullRequestWithApi({ client, event });
+
+    assert.equal(report.valid, true);
   });
 });

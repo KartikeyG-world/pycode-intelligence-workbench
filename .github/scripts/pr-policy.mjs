@@ -111,25 +111,84 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
   }
 
   // 7. Template Section: AI Assistance Disclosure (ALWAYS ENFORCED FOR ALL CONTRIBUTORS AND OWNER)
-  // - [x] No OR - [x] Yes
-  const aiNoChecked = /- \[[xX]\]\s*No/i.test(body);
-  const aiYesChecked = /- \[[xX]\]\s*Yes/i.test(body);
-
-  if (!aiNoChecked && !aiYesChecked) {
-    errors.push('AI Assistance Disclosure is incomplete: neither `No` nor `Yes` is checked.');
-  } else if (aiNoChecked && aiYesChecked) {
-    errors.push('AI Assistance Disclosure is ambiguous: both `No` and `Yes` are checked. Please select exactly one.');
-  }
-
-  // Sub-confirmations for AI disclosure (ALWAYS ENFORCED)
-  const understandConfirmed = /- \[[xX]\]\s*I confirm that I understand, have personally verified, and can explain every line/i.test(body);
-  if (!understandConfirmed) {
+  // Section-scoped matching strictly within ## AI Assistance Disclosure
+  const aiSectionMatch = body.match(/(?:^|\r?\n)##\s*AI Assistance Disclosure[^\r\n]*(?:\r?\n([\s\S]*?)(?=(?:\r?\n##\s)|$)|$)/i);
+  if (!aiSectionMatch) {
+    errors.push('AI Assistance Disclosure section is missing from the PR description.');
     errors.push('AI Disclosure confirmation missing: "I confirm that I understand, have personally verified, and can explain every line of code..." must be checked.');
-  }
-
-  const noCopiedConfirmed = /- \[[xX]\]\s*I confirm that this contribution contains no mass-generated, copied, or unverified code/i.test(body);
-  if (!noCopiedConfirmed) {
     errors.push('AI Disclosure confirmation missing: "I confirm that this contribution contains no mass-generated, copied, or unverified code" must be checked.');
+  } else {
+    const aiSectionText = aiSectionMatch[1] || '';
+
+    // Match No checkboxes within the AI section
+    // Examples: - [x] No, - [ ] No, * [X] No.
+    const noMatches = [...aiSectionText.matchAll(/^[ \t]*[-*]\s*\[([ xX])\]\s*No\b/gim)];
+    // Match Yes checkboxes within the AI section
+    // Examples: - [x] Yes, - [ ] Yes (please disclose...)
+    const yesMatches = [...aiSectionText.matchAll(/^[ \t]*[-*]\s*\[([ xX])\]\s*Yes\b/gim)];
+
+    const noCheckedCount = noMatches.filter(m => m[1].toLowerCase() === 'x').length;
+    const yesCheckedCount = yesMatches.filter(m => m[1].toLowerCase() === 'x').length;
+
+    if (noMatches.length === 0 && yesMatches.length === 0) {
+      errors.push('AI Assistance Disclosure is malformed: no `No` or `Yes` options found in the section.');
+    } else if (noMatches.length > 1 || yesMatches.length > 1) {
+      errors.push('AI Assistance Disclosure is ambiguous: duplicate AI disclosure options found in the section.');
+    } else if (noCheckedCount === 0 && yesCheckedCount === 0) {
+      errors.push('AI Assistance Disclosure is incomplete: neither `No` nor `Yes` is checked.');
+    } else if (noCheckedCount > 0 && yesCheckedCount > 0) {
+      errors.push('AI Assistance Disclosure is ambiguous: both `No` and `Yes` are checked. Please select exactly one.');
+    }
+
+    // When Yes is checked, require meaningful disclosure details
+    if (yesCheckedCount === 1 && noCheckedCount === 0) {
+      const lines = aiSectionText.split(/\r?\n/);
+      let yesLineIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (/^[ \t]*[-*]\s*\[[ xX]\]\s*Yes\b/i.test(lines[i])) {
+          yesLineIndex = i;
+          break;
+        }
+      }
+
+      const detailsParts = [];
+      if (yesLineIndex !== -1) {
+        const match = lines[yesLineIndex].match(/^[ \t]*[-*]\s*\[[ xX]\]\s*Yes\b(.*)$/i);
+        if (match && match[1]) {
+          detailsParts.push(match[1]);
+        }
+
+        for (let i = yesLineIndex + 1; i < lines.length; i++) {
+          const line = lines[i];
+          // Stop at next checkbox, header, or horizontal rule
+          if (/^[ \t]*[-*]\s*\[[ xX\s]\]/i.test(line)) break;
+          if (/^[ \t]*(?:#{1,6}\s|---|___|\*\*\*)/.test(line)) break;
+          detailsParts.push(line);
+        }
+      }
+
+      const rawDetails = stripMarkdownComments(detailsParts.join('\n'));
+      // Remove template instructions and placeholder text
+      const cleanDetails = rawDetails
+        .replace(/\(?\s*please disclose tools used and extent of assistance below:?\s*\)?/gi, '')
+        .replace(/^[\s:;,-]+|[\s:;,-]+$/g, '')
+        .trim();
+
+      if (cleanDetails.length < 5) {
+        errors.push('AI Assistance Disclosure is incomplete: `Yes` is checked but no meaningful disclosure details were provided. Please specify the AI tools used and the extent of assistance.');
+      }
+    }
+
+    // Sub-confirmations for AI disclosure (ALWAYS ENFORCED)
+    const understandConfirmed = /[-*]\s*\[[xX]\]\s*I confirm that I understand, have personally verified, and can explain every line/i.test(aiSectionText);
+    if (!understandConfirmed) {
+      errors.push('AI Disclosure confirmation missing: "I confirm that I understand, have personally verified, and can explain every line of code..." must be checked.');
+    }
+
+    const noCopiedConfirmed = /[-*]\s*\[[xX]\]\s*I confirm that this contribution contains no mass-generated, copied, or unverified code/i.test(aiSectionText);
+    if (!noCopiedConfirmed) {
+      errors.push('AI Disclosure confirmation missing: "I confirm that this contribution contains no mass-generated, copied, or unverified code" must be checked.');
+    }
   }
 
   // 8. Description content validation: Problem Addressed & Summary of Changes (ALWAYS ENFORCED)

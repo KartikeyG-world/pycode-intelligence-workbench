@@ -1,91 +1,151 @@
-# Workbench Frontend
+# Frontend Development Guide
 
-The interactive web user interface for the **Python Code Intelligence & Performance Workbench**.
+The `frontend/` directory contains the browser-based interface for the **Python Code Intelligence & Performance Workbench**. It provides a workspace for entering Python source code, requesting static analysis from the FastAPI backend, and exploring the returned complexity, statistics, structure, reasoning, and saved analysis history.
 
-Built with Next.js 16 (App Router), React 19, TypeScript 5, and Tailwind CSS v4.
+The frontend does not analyze or execute submitted Python itself. It sends source code to the backend API and renders the backend's response.
 
----
+## Technology Stack
 
-## Capabilities & Architecture
+| Technology | Purpose |
+|---|---|
+| Next.js 16.3.6 (App Router) | Frontend application and development/production server |
+| React 19.2.8 | UI components and client-side state |
+| TypeScript | Typed component props and API data contracts |
+| Tailwind CSS v4 | Utility-first styling |
+| `@monaco-editor/react` | Python code editor |
+| `@xyflow/react` | Interactive code-structure graph |
+| Recharts | Theoretical complexity charts |
+| `lucide-react` | Interface icons |
 
-The frontend provides an interactive, dual-column analysis workspace:
+The exact dependency versions and ranges are maintained in `package.json` and `package-lock.json`.
 
-- **Monaco Code Editor (`components/CodeEditor.tsx`):** In-browser Python source code editor with syntax highlighting, line numbers, template selectors, and toolbar actions (Analyze, Reset, Export).
-- **Asymptotic Complexity Overview (`components/ComplexityOverview.tsx`):** Displays deduced time/space complexity, tight bounds, confidence levels, and space breakdown.
-- **AST Control Flow & Hierarchy (`components/StructureFlow.tsx`):** Interactive React Flow diagram (`@xyflow/react`) visualizing AST basic-block control flow, parent-child hierarchy, and basic-block topologies with dark-themed controls.
-- **Project Metrics Overview (`components/metrics/MetricsOverview.tsx`):** Project-wide summary cards aggregating procedural scope counts, structural averages, cyclomatic complexity averages, Halstead volume/effort averages, and diagnostic populations.
-- **Per-Scope Metrics Explorer (`components/metrics/ScopeMetricsTable.tsx`):** Sortable, responsive data table presenting all canonical AST scopes with sticky identifier column pinning, multi-column sorting, and canonical preorder reset.
-- **Detailed Scope Inspector (`components/metrics/ScopeInspector.tsx`):** Deep-dive modal/drawer detailing scope-level cyclomatic complexity, CFG reachability, decision-point breakdown, structural AST distributions, Halstead token inventories, and syntax coverage diagnostics.
-- **Project Correlation Analysis (`components/metrics/ProjectCorrelationSection.tsx`):** Statistical co-variation analysis (Pearson $r$ and Spearman $\rho$) across 5 dimensions with status diagnostics and an interactive scatter plot rendered directly from backend observation pairs.
+## Prerequisites
 
----
+- **Node.js:** version 20 or later (the minimum declared in `package.json` is `>=20.0.0`).
+- **npm:** required to install dependencies and run the frontend scripts.
+- **FastAPI backend:** required for analysis, history, and backend health requests. Follow the backend setup in the root [DEVELOPMENT.md](../DEVELOPMENT.md).
 
-## Directory Structure
+## Installation
 
-```text
-frontend/
-├── app/
-│   ├── globals.css          # Tailwind CSS v4 imports and dark scrollbar rules
-│   ├── layout.tsx           # Root HTML layout, font setup, and document metadata
-│   └── page.tsx             # Main dual-column analysis workspace and state management
-├── components/
-│   ├── CodeEditor.tsx       # Monaco Editor wrapper and toolbar controls
-│   ├── ComplexityOverview.tsx# Algorithmic time/space complexity summary
-│   ├── StructureFlow.tsx    # React Flow AST hierarchy diagram
-│   └── metrics/             # Phase 1C static metrics components
-│       ├── MetricsOverview.tsx
-│       ├── ScopeMetricsTable.tsx
-│       ├── ScopeInspector.tsx
-│       └── ProjectCorrelationSection.tsx
-├── lib/
-│   ├── api.ts               # HTTP client communication with FastAPI backend
-│   └── utils.ts             # Tailwind class merging utilities
-├── types/
-│   └── analysis.ts          # TypeScript type definitions matching backend Pydantic schemas
-├── package.json
-└── tsconfig.json
-```
-
----
-
-## Prerequisites & Installation
-
-- **Node.js:** Requires Node.js `>=20.0.0` (as defined in `package.json` engines).
-- **Package Installation:** Use `npm ci` for deterministic clean installation of locked dependencies:
+From the repository root, install the locked dependencies:
 
 ```bash
 cd frontend
 npm ci
 ```
 
----
+Use `npm ci` to install from the checked-in `package-lock.json`. It provides a clean, reproducible install and does not update the lockfile.
+
+## Development
+
+Start the Next.js development server from the `frontend/` directory:
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser. Keep the FastAPI backend running separately so that analysis, history, and health-check requests can reach it.
+
+## Backend Connection
+
+The frontend communicates with the FastAPI backend through the HTTP helpers in `lib/api.ts`. The API base URL is read from the public environment variable:
+
+- **Variable:** `NEXT_PUBLIC_API_URL`
+- **Default:** `http://localhost:8000/api`
+
+If the variable is not set, the frontend uses the default above. To point the frontend at a different backend, create a `.env.local` file in `frontend/` and set the variable, for example:
+
+```dotenv
+NEXT_PUBLIC_API_URL=http://localhost:8000/api
+```
+
+Restart the development server after changing environment configuration. Because this variable is prefixed with `NEXT_PUBLIC_`, its value is exposed to the browser bundle; do not put secrets or private credentials in it.
+
+The current API client uses these routes relative to the configured base URL:
+
+| Request | Purpose |
+|---|---|
+| `POST /analyze` | Submit Python source code for static analysis |
+| `GET /history` | Retrieve saved analysis history |
+| `GET /history/{submissionId}` | Retrieve a saved analysis record |
+| `GET /health` | Check backend and database health |
+
+For the complete backend setup and repository-wide development workflow, see [DEVELOPMENT.md](../DEVELOPMENT.md).
 
 ## Available Scripts
 
-From the `frontend/` directory:
+Run these commands from `frontend/`:
 
-| Script | Command | Purpose |
-|---|---|---|
-| `dev` | `npm run dev` | Start Next.js development server on `http://localhost:3000` |
-| `lint` | `npm run lint` | Run ESLint validation across all pages and components |
-| `typecheck` | `npx tsc --noEmit` | Execute TypeScript strict compiler validation without emitting files |
-| `build` | `npm run build` | Produce optimized Next.js production build (`next build --webpack`) |
-| `start` | `npm run start` | Start Next.js production server from built assets |
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Start the Next.js development server |
+| `npm run lint` | Run ESLint |
+| `npm run build` | Create a production build using `next build --webpack` |
+| `npm run start` | Start the production server from a completed build |
+| `npx tsc --noEmit` | Run the TypeScript compiler without emitting files |
 
----
+There is no separate `typecheck` script in `package.json`; use `npx tsc --noEmit` directly. Run linting, TypeScript checking, and the production build independently so that each result is clear.
 
-## Environment & API Configuration
+To test the production server locally:
 
-The frontend communicates with the FastAPI backend over HTTP JSON APIs configured in `frontend/lib/api.ts`:
+```bash
+npm run build
+npm run start
+```
 
-- **Environment Variable:** `NEXT_PUBLIC_API_URL`
-- **Default Value:** `http://localhost:8000/api` (falls back automatically when unset)
+## Component Architecture
 
-### Endpoint Routes
+The main workspace is assembled in `app/page.tsx`. Its principal components are:
 
-- Static analysis: `POST ${NEXT_PUBLIC_API_URL}/analyze`
-- Persisted history list: `GET ${NEXT_PUBLIC_API_URL}/history`
-- History item detail: `GET ${NEXT_PUBLIC_API_URL}/history/:submissionId`
-- Backend health check: `GET ${NEXT_PUBLIC_API_URL}/health`
+| Component | Responsibility |
+|---|---|
+| `CodeEditor` | Wraps Monaco Editor for Python source input. Provides example presets, line/character information, reset and analyze actions, and the Ctrl/Cmd+Enter shortcut. |
+| `ComplexityOverview` | Presents the returned time and space complexity, tight bound when available, confidence, nesting information, and space breakdown. |
+| `StatisticsGrid` | Summarizes code statistics such as function, loop, conditional, recursion, operation, and comprehension counts. |
+| `ComplexityChart` | Uses Recharts to display the theoretical growth curves supplied by the backend. |
+| `StructureFlow` | Uses React Flow to render the returned code-structure nodes and edges as an interactive diagram. |
+| `ReasoningPanel` | Displays the complexity explanation, detected patterns, optimization suggestions, and available reasoning details such as recurrence information and limitations. |
+| `HistoryDrawer` | Loads saved analysis entries and lets a user select a previous submission to restore its code and result. |
+| `ReportModal` | Formats the current analysis as a Markdown report that can be copied or downloaded. |
+| `Navbar` | Displays backend/database status and provides access to analysis history and report export. |
 
-For full end-to-end setup and operations, consult the root [DEVELOPMENT.md](../DEVELOPMENT.md).
+The page coordinates editor state, analysis requests, backend health polling, selected results, and the history/report overlays. Component files are located in `components/`.
+
+## API Types
+
+The frontend API contracts are defined in `types/analysis.ts`. This file contains the TypeScript interfaces used by the API client and UI components, including analysis responses, code statistics and structure, theoretical graph data, and history records.
+
+These interfaces describe the JSON shapes expected by the frontend. Keep them synchronized with the corresponding backend Pydantic schemas and API responses: a mismatch can cause incorrect assumptions when rendering data even if the frontend compiles successfully. When changing an API field, review both sides of the contract.
+
+The HTTP request and response handling is centralized in `lib/api.ts`; prefer using those helpers rather than duplicating API URLs and fetch logic in components.
+
+## Verification
+
+Run each frontend check from the `frontend/` directory:
+
+**1. ESLint**
+
+```bash
+npm run lint
+```
+
+**2. TypeScript**
+
+```bash
+npx tsc --noEmit
+```
+
+**3. Production build**
+
+```bash
+npm run build
+```
+
+These checks are independent. A successful lint run does not establish that type checking or the production build succeeds. The production start command also requires a completed build.
+
+## Related Documentation
+
+- [Repository overview](../README.md)
+- [Development and operations guide](../DEVELOPMENT.md)
+- [Contribution guidelines](../CONTRIBUTING.md)
+

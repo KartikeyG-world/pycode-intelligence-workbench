@@ -232,24 +232,39 @@ Because `pull_request_target` (for policy) and `workflow_run` (for PR summary) e
 
 ## 7. Frontend Dependency Security Audit & Maintenance Pathway
 
-A comprehensive security audit of `frontend/package.json` (`npm audit --json`) identified **13 known vulnerabilities** (0 info, 2 low, 7 moderate, 3 high, 1 critical):
+A comprehensive security audit of `frontend/package.json` and `frontend/package-lock.json` (`npm audit --json`) identified **13 vulnerable package records** (0 info, 2 low, 7 moderate, 3 high, 1 critical):
 
 > [!WARNING]
 > The frontend application is **not vulnerability-free**. Production dependency remediation is intentionally isolated from this maintainer automation PR to preserve frontend build stability and avoid regressions in AST visualization components.
 
-### Verified Vulnerability & Advisory Inventory
+### Package Records vs. Security Advisories Distinction
 
-The audit reported **13 vulnerability records** categorized by severity: **1 Critical, 3 High, 7 Moderate, 2 Low** (0 Info):
+`npm audit` reports vulnerabilities at two distinct levels:
+1. **Vulnerable Package Records (13 Total):** The audit metadata categorizes 13 distinct packages present in the local dependency tree according to their highest detected severity: **1 Critical, 3 High, 7 Moderate, 2 Low** (0 Info).
+2. **Security Advisories (25 Total):** Across these 13 packages, there are **25 distinct security advisories** (GHSA identifiers) documented in the official GitHub Advisory Database. A single package record may be subject to multiple distinct vulnerability advisories (e.g., `next` is affected by 16 advisories, and `dompurify` is affected by 5 advisories).
 
-| Package | Severity | Primary Advisory Identifier | Dependency Path | Description & Impact |
-|---|---|---|---|---|
-| `next` (`16.3.6`) | **Critical** | [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw), [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr) | Direct (`frontend/package.json`) | Unauthenticated Remote Code Execution in Image Optimization API when SVG files are used (`GHSA-2464-fhr4-w9xw`) and in `use cache` functions returning typed arrays (`GHSA-673q-mjm6-r5xr`), plus high-severity SSRF (`GHSA-cjq9-62q9-8jv4`) and DoS (`GHSA-p3m5-59mp-jv5r`). |
-| `sharp` (`0.34.5`) | **High** | [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) | Direct (`frontend/package.json`) | Vulnerability in librsvg dependency (CVE-2026-96889). |
-| `zod` (`4.3.6`) | **High** | [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) | Direct (`frontend/package.json`) | Memory exhaustion while validating oversized constrained collections (CVSS 7.5). |
-| `source-map-js` (`1.2.1`) | **High** | [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) | Transitive (via `postcss`) | Event-loop denial of service through indexed source-map section offsets (CVSS 7.5). |
-| `minimatch` (`9.0.5`) | **Moderate** | [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) | Transitive (via `@typescript-eslint/typescript-estree`) | Regular expression denial of service via globparts amplification. Propagates through 5 `@typescript-eslint/*` packages and `typescript-eslint`. |
-| `dompurify` (`3.4.16`) | **Low** | [GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p), [GHSA-6688-9rhm-gjv2](https://github.com/advisories/GHSA-6688-9rhm-gjv2), [GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f), [GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7), [GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) | Transitive (via `monaco-editor`) | Detached DOM hooks, force-removed rawtext roots, and SMIL attribute bypasses in DOMPurify. Propagates to `monaco-editor`. |
+### Dependency Classification Invariant
+
+In `frontend/package.json`, only **`next` (`16.3.6`)** is declared as a direct dependency. All other vulnerable packages (`sharp`, `zod`, `source-map-js`, `minimatch`, `dompurify`, `monaco-editor`, `@typescript-eslint/*`, and `typescript-eslint`) are **transitive dependencies** pulled in through Next.js, ESLint configurations, or UI component libraries. Neither `sharp` nor `zod` is declared in `frontend/package.json`.
+
+### Verified Vulnerability Inventory (All 13 Package Records)
+
+| Package Name | Installed Version | Severity | Dependency Status | Actual Dependency Path | Advisory Identifiers | Affected Range | Available Fix Information |
+|---|---|---|---|---|---|---|---|
+| `next` | `16.3.6` | **Critical** | **Direct** (`frontend/package.json`) | `dependencies.next` | [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw) (Critical RCE in SVG optimization), [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr) (Critical RCE in `use cache`), [GHSA-cjq9-62q9-8jv4](https://github.com/advisories/GHSA-cjq9-62q9-8jv4) (High SSRF), [GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) (High DoS), plus 12 Moderate/Low advisories | `>=16.0.0 <=16.4.0` | Upgrade to `next@16.4.6` (semver non-breaking) |
+| `sharp` | `0.34.5` | **High** | **Transitive** | `next` &rarr; `sharp` | [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) (librsvg CVE-2026-96889) | `<0.35.5` | Upgrade `next` to `>=16.4.6` or update lockfile |
+| `zod` | `4.6.5` | **High** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `eslint-plugin-react-hooks` &rarr; `zod` | [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (Memory exhaustion) | `<4.6.6` | Update `eslint-config-next` / `eslint-plugin-react-hooks` |
+| `source-map-js` | `1.2.1` | **High** | **Transitive** | `devDependencies.@tailwindcss/postcss` &rarr; `@tailwindcss/node` &rarr; `source-map-js` (and `postcss`) | [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) (Event-loop DoS) | `>=1.0.0 <1.2.2` | Update `@tailwindcss/postcss` / `postcss` |
+| `minimatch` | `3.1.5` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/typescript-estree` &rarr; `minimatch` | [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (DoS via globparts amplification) | `>=7.0.0 <11.0.1` | Update `eslint-config-next` / `@typescript-eslint/*` |
+| `@typescript-eslint/typescript-estree` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/typescript-estree` | Affected transitively via `minimatch` | N/A | Update `eslint-config-next` |
+| `@typescript-eslint/parser` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/parser` | Affected transitively via `@typescript-eslint/typescript-estree` | N/A | Update `eslint-config-next` |
+| `@typescript-eslint/type-utils` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/type-utils` | Affected transitively via `@typescript-eslint/typescript-estree` | N/A | Update `eslint-config-next` |
+| `@typescript-eslint/utils` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/utils` | Affected transitively via `@typescript-eslint/typescript-estree` | N/A | Update `eslint-config-next` |
+| `@typescript-eslint/eslint-plugin` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/eslint-plugin` | Affected transitively via `@typescript-eslint/type-utils`, `@typescript-eslint/utils` | N/A | Update `eslint-config-next` |
+| `typescript-eslint` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` | Affected transitively via `@typescript-eslint/*` | N/A | Update `eslint-config-next` |
+| `dompurify` | `3.4.15` | **Low** | **Transitive** | `dependencies.@monaco-editor/react` &rarr; `monaco-editor` &rarr; `dompurify` | [GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p), [GHSA-6688-9rhm-gjv2](https://github.com/advisories/GHSA-6688-9rhm-gjv2), [GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f), [GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7), [GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) | `<=3.4.16` | Update `monaco-editor` |
+| `monaco-editor` | `0.57.0` | **Low** | **Transitive** | `dependencies.@monaco-editor/react` &rarr; `monaco-editor` | Affected transitively via `dompurify` | N/A | Update `@monaco-editor/react` / `monaco-editor` |
 
 ### Remediation Guidance & Dedicated Maintenance PR
-- **Recommended Action:** Upgrade Next.js to `>= 16.4.6` in `frontend/package.json` (resolving all direct Next.js advisories and updating transitive `sharp` and `zod`) and run `npm audit fix` in an isolated pull request following the merge of PR #29.
+- **Recommended Action:** Upgrade Next.js to `>= 16.4.6` in `frontend/package.json` (resolving all direct Next.js advisories and updating transitive `sharp`) and update lockfile dependencies in an isolated pull request following the merge of PR #29.
 - **Verification Criteria:** The follow-up PR must execute `npm run lint`, `npx tsc --noEmit`, and `npm run build`, and confirm layout rendering across desktop and mobile viewports.

@@ -26,7 +26,7 @@ To streamline contributor onboarding while preserving fair access to tasks, this
 | `/help` | Issue / PR Comments | Display the full list of available automation commands. |
 
 #### Assignment Rules & Policies
-1. **Single-Contributor Assignment Guarantee:** Every issue is assigned to **at most one** contributor. Concurrent claim requests are queued in FIFO order; once a contributor is confirmed as the assignee, further claim requests are politely rejected.
+1. **Single-Contributor Assignment Guarantee:** Every issue is assigned to **at most one** contributor. Concurrent claim requests are serialized via repository-wide concurrency; once a contributor is confirmed as the assignee, further claim requests are politely rejected.
 2. **Two Active WOCS Issues Limit:** To prevent task hoarding and ensure fair distribution, contributors may have at most **two active WOCS issues** assigned simultaneously across the repository. If you currently hold two assigned open WOCS issues, your `/claim` command will be rejected until you complete or `/unclaim` one of them.
 3. **WOCS Eligibility Pre-Conditions:** An issue can only be claimed via `/claim` or `/assign` if:
    - The issue is currently **open** and **unlocked**.

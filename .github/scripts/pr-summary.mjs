@@ -68,8 +68,12 @@ export function generateCiSummaryComment({ jobs = [], runUrl, overallConclusion,
 
   const jobRows = jobs.map(j => `| ${j.name || 'Unknown Job'} | ${formatStatus(j.conclusion)} |`).join('\n');
 
-  // Strict verification check:
-  // Every expected job must exist exactly once and have conclusion === 'success'
+  // Strict exact set matching:
+  // 1. Overall workflow conclusion must be 'success'
+  // 2. All expected jobs must exist and no unexpected/extra jobs are allowed (exact length match)
+  // 3. Every job's name must be in EXPECTED_JOBS
+  // 4. Every expected job must appear exactly once (no duplicates, no omissions)
+  // 5. Every job must have conclusion === 'success' (no null, skipped, cancelled, failed)
   const jobCounts = new Map();
   for (const job of jobs) {
     const name = job?.name;
@@ -78,17 +82,18 @@ export function generateCiSummaryComment({ jobs = [], runUrl, overallConclusion,
     }
   }
 
-  // Reject missing or duplicate expected jobs
+  const exactJobCount = jobs.length === EXPECTED_JOBS.length;
+  const noUnexpectedJobs = jobs.every(j => EXPECTED_JOBS.includes(j?.name));
   const everyExpectedPresentOnce = EXPECTED_JOBS.every(name => jobCounts.get(name) === 1);
-
-  // Reject failed, cancelled, skipped, null conclusion, or unknown results
-  const allJobsValidSuccess = jobs.length > 0 && jobs.every(j => j.conclusion === 'success');
+  const allJobsValidSuccess = jobs.every(j => j?.conclusion === 'success');
   const allExpectedSucceeded = EXPECTED_JOBS.every(name => {
     const matchingJobs = jobs.filter(j => j.name === name);
     return matchingJobs.length === 1 && matchingJobs[0].conclusion === 'success';
   });
 
   const isStrictSuccess = overallConclusion === 'success' &&
+                          exactJobCount &&
+                          noUnexpectedJobs &&
                           everyExpectedPresentOnce &&
                           allExpectedSucceeded &&
                           allJobsValidSuccess;

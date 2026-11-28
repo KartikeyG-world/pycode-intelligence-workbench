@@ -345,4 +345,49 @@ describe('PR CI Summary Tests - Strict Job Validation & Idempotency', () => {
     assert.equal(updatedCommentId, 777);
     assert.equal(postCalled, false, 'Should not create duplicate comment when comment exists on page 2');
   });
+
+  // 15. Four expected jobs plus additional successful unknown job
+  test('15. rejects when four expected jobs are present plus an additional successful unknown job', () => {
+    const jobs = [
+      ...makeAllFourPassingJobs(),
+      { name: 'Unexpected Extra Step', conclusion: 'success' }
+    ];
+    const comment = generateCiSummaryComment({
+      jobs,
+      runUrl: 'https://github.com/owner/repo/actions/runs/12345',
+      overallConclusion: 'success'
+    });
+
+    assert.match(comment, /One or more checks failed or incomplete/);
+    assert.ok(!comment.includes('All automated CI checks passed!'));
+  });
+
+  // 16. Four expected jobs plus additional failed unknown job
+  test('16. rejects when four expected jobs are present plus an additional failed unknown job', () => {
+    const jobs = [
+      ...makeAllFourPassingJobs(),
+      { name: 'Unexpected Extra Step', conclusion: 'failure' }
+    ];
+    const comment = generateCiSummaryComment({
+      jobs,
+      runUrl: 'https://github.com/owner/repo/actions/runs/12345',
+      overallConclusion: 'failure'
+    });
+
+    assert.match(comment, /One or more checks failed or incomplete/);
+    assert.ok(!comment.includes('All automated CI checks passed!'));
+  });
+
+  // 17. Empty job results
+  test('17. rejects when jobs array is empty', () => {
+    const comment = generateCiSummaryComment({
+      jobs: [],
+      runUrl: 'https://github.com/owner/repo/actions/runs/12345',
+      overallConclusion: 'success'
+    });
+
+    assert.match(comment, /No Job Execution Records Available/);
+    assert.match(comment, /Checks unverified/);
+    assert.ok(!comment.includes('All automated CI checks passed!'));
+  });
 });

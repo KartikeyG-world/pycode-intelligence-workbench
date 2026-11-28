@@ -94,13 +94,34 @@ jobs:
       - name: Run unit test suite
         run: node --test .github/scripts-tests/*.test.mjs
 
-      - name: Run workflow validation script
+      - name: Run workflow security and pinning validation
         run: node .github/scripts-tests/validate-workflows.mjs
 
-      - name: Lint workflows with actionlint (if available)
+      - name: Install and run mandatory actionlint
         run: |
-          if command -v actionlint >/dev/null 2>&1; then
-            actionlint
-          else
-            echo "actionlint not preinstalled in runner image; relying on validate-workflows.mjs"
-          fi
+          set -euo pipefail
+          ACTIONLINT_VERSION="1.7.12"
+          ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          EXPECTED_SHA256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          URL="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${ARCHIVE}"
+
+          echo "Downloading actionlint v${ACTIONLINT_VERSION}..."
+          curl -sSLO "$URL"
+
+          echo "Verifying SHA-256 checksum..."
+          echo "${EXPECTED_SHA256}  ${ARCHIVE}" | sha256sum -c -
+
+          echo "Extracting actionlint binary..."
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$ARCHIVE" -C "$HOME/.local/bin" actionlint
+          rm "$ARCHIVE"
+          chmod +x "$HOME/.local/bin/actionlint"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "Verifying installed actionlint version:"
+          actionlint -version
+
+          echo "Executing mandatory actionlint workflow check..."
+          actionlint

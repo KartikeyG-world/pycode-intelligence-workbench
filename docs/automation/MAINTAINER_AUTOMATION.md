@@ -62,12 +62,14 @@ Commands are parsed with strict token-level matching. Commands embedded in ordin
   5. The requesting contributor does not already hold **more than two active assigned WOCS issues** in this repository.
   6. The user is assignable via GitHub API.
 - **Cross-Issue & Single-Contributor Concurrency Guarantee:** Uses a single repository-wide GitHub Actions concurrency group (`group: issue-commands-${{ github.repository }}`) configured with `queue: max` and `cancel-in-progress: false`.
-  - **Cross-Issue Protection:** Because the queue is serialized at the repository level rather than per-issue, simultaneous claims submitted by the same contributor on different issues (e.g. `/claim` on #40 and `/claim` on #41) cannot race or bypass the 2-active-WOCS-issue limit. The second request is queued until the first completes its assignment and database update, ensuring the second request re-evaluates the fresh quota and is rejected.
+  - **Cross-Issue Protection:** Because the queue is serialized at the repository level rather than per-issue, simultaneous claims submitted by the same contributor on different issues (e.g. `/claim` on #40 and `/claim` on #41) cannot race or bypass the 2-active-WOCS-issue limit. The second request is serialized until the first completes its assignment and updates GitHub state, ensuring the second request re-evaluates the fresh quota and is rejected.
   - **Verification Flow:** The bot re-fetches the issue state, verifies that no assignee exists, queries the contributor's paginated active WOCS issue list across all pages (100 items per page, excluding PRs), executes the assignment API call, and verifies the final updated assignee list.
-  - **Operational Trade-Offs & Queue Limits:**
-    - GitHub Actions queues up to 100 pending workflow runs in FIFO order. If high burst traffic exceeds 100 pending runs, additional runs may be dropped or cancelled by GitHub.
-    - All command traffic across the repository (claims, unclaims, status queries, level assignments) is processed sequentially. Given the project's scale, per-command execution takes ~10–15 seconds, providing responsive sequential throughput.
-    - **Not an Atomic Database Transaction:** GitHub Actions runs independently of GitHub's internal database locks. If a maintainer manually assigns a contributor via the GitHub web UI while a bot claim is in flight, the bot detects this during post-assignment verification and gracefully fails with an informative rejection message without overwriting the assignment.
+  - **Queue Ordering & Operational Characteristics:**
+    - Bot-triggered issue commands sharing the concurrency group are serialized.
+    - GitHub Actions queue ordering is based on when a workflow run transitions into a waiting state, not necessarily the exact event dispatch timestamp. Ordering by dispatch timestamp is not guaranteed by GitHub.
+    - The concurrency queue permits up to 100 pending runs. Additional runs initiated when the queue is at capacity are cancelled.
+    - Manual assignments made through the GitHub web UI operate outside this workflow concurrency group.
+    - Post-assignment verification detects certain out-of-band assignment conflicts, but this is not an atomic database transaction. If an out-of-band manual assignment occurs concurrently, the bot catches the conflict during post-assignment verification and fails safely with an informative rejection message rather than claiming success.
 - **Paginated Active Issue Limit Check:** Queries the GitHub REST API across all pages (`per_page=100`) to count active open WOCS issues assigned to the requester, strictly excluding pull requests and non-WOCS tasks.
 
 #### `/unclaim`
@@ -149,10 +151,10 @@ Every workflow enforces explicit least-privilege permissions without repository 
 | Workflow | Explicit Permissions Declared | Privilege Justification |
 |---|---|---|
 | `issue-intake.yml` | `contents: read`, `issues: write` | Post welcoming comment on new issues. |
-| `issue-commands.yml` | `contents: read`, `issues: write`, `pull-requests: write`, `actions: write` | Assign issues, update PR labels, and dispatch `pull-request-policy.yml` upon `/level` command. `actions: write` is strictly required by the GitHub Actions API for `workflow_dispatch`. |
+| `issue-commands.yml` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: write` | Assign issues, read PR details, update PR labels via issues API, and dispatch `pull-request-policy.yml` upon `/level` command. `actions: write` is strictly required by the GitHub Actions API for `workflow_dispatch`. |
 | `pull-request-ci.yml` | `contents: read` | Read-only matrix CI execution across Python 3.11/3.13, frontend, and maintainer automation tests. |
-| `pull-request-policy.yml` | `contents: read`, `pull-requests: read`, `issues: read`, `statuses: write` | Read-only policy validation of PR metadata; `statuses: write` allows posting commit status check outcomes. |
-| `pull-request-summary.yml` | `contents: read`, `pull-requests: write`, `issues: write`, `actions: read` | Read CI run job conclusions from Actions API and post/update the pinned summary comment. |
+| `pull-request-policy.yml` | `contents: read`, `pull-requests: read`, `issues: read` | Read-only policy validation of PR and linked issue metadata from trusted base branch. |
+| `pull-request-summary.yml` | `contents: read`, `actions: read`, `issues: write` | Read CI run job conclusions from Actions API, check out default branch to run trusted summary script, and post/update the pinned summary comment via issues API. |
 
 ---
 
@@ -160,13 +162,27 @@ Every workflow enforces explicit least-privilege permissions without repository 
 
 After deploying these workflows, configure the following settings in GitHub:
 
-### A. Workflow Permissions & Event Policy
+### A. Mandatory External Deployment Prerequisite: GitHub Actions Event Policy for `pull_request_target`
+
+> [!IMPORTANT]
+> **Platform Policy Enforcement (December 2, 2026):**
+> Because this repository is public, GitHub's default platform policy for public repositories will block workflows triggered by `pull_request_target` beginning December 2, 2026 unless an applicable GitHub Actions event policy explicitly permits it.
+>
+> This is an **external GitHub repository/organization setting** that cannot be configured merely via workflow YAML.
+>
+> **Required Maintainer Actions:**
+> 1. Navigate to **Repository Settings > Actions > General > Event policies** (or Organization Settings if managed at org level).
+> 2. Explicitly configure an event policy allowing `pull_request_target` workflows.
+> 3. Where workflow-file targeting is supported by GitHub, scope the allow rule specifically to `.github/workflows/pull-request-policy.yml`.
+> 4. Verify the configuration in GitHub Actions policy settings and policy insights before the December 2, 2026 enforcement cutoff.
+> 5. **Status:** Outstanding maintainer administrative action (must be executed in GitHub web UI upon merging PR #29; cannot be completed via git repository files).
+
+### B. Workflow Permissions
 Navigate to **Settings > Actions > General > Workflow permissions**:
 - Select **Read and write permissions** (required for `GITHUB_TOKEN` to assign issues, manage labels, and post comments).
 - Ensure **Allow GitHub Actions to create and approve pull requests** remains unchecked (maintains manual maintainer approval boundary).
-- **GitHub Event Policy Note for `pull_request_target`:** The repository administrator must explicitly check the Actions event-policy configuration in repository Settings before **December 2, 2026** (to verify that `pull_request_target` workflows from default branch are permitted under your organization's policy).
 
-### B. Branch Protection Rules for `main`
+### C. Branch Protection Rules for `main`
 Navigate to **Settings > Branches** (or **Rulesets > New ruleset**) for `main`:
 1. **Require a pull request before merging:**
    - Require 1 approving review.
@@ -184,7 +200,7 @@ Navigate to **Settings > Branches** (or **Rulesets > New ruleset**) for `main`:
 4. **Prevent branch deletion:** Enabled.
 5. **Require conversation resolution before merging:** Enabled.
 
-### C. Post-Merge Verification Procedure
+### D. Post-Merge Verification Procedure
 
 Because `pull_request_target` (for policy) and `workflow_run` (for PR summary) execute exclusively from the default branch (`main`), they cannot be triggered by PR events until PR #29 is merged to `main`. After merging PR #29, execute this verification runbook:
 
@@ -223,19 +239,16 @@ A comprehensive security audit of `frontend/package.json` (`npm audit --json`) i
 
 ### Verified Vulnerability & Advisory Inventory
 
-| Package | Severity | Exact GHSA / CVE Identifier | Direct vs Transitive | Summary & Impact |
+The audit reported **13 vulnerability records** categorized by severity: **1 Critical, 3 High, 7 Moderate, 2 Low** (0 Info):
+
+| Package | Severity | Primary Advisory Identifier | Dependency Path | Description & Impact |
 |---|---|---|---|---|
-| `next` (`16.3.6`) | **Critical** | [GHSA-8g9c-4865-x492](https://github.com/advisories/GHSA-8g9c-4865-x492) | Direct | SSRF in Next.js Image Optimization (*Note: previous attribution to CVE-2024-34351 was an older Next.js 14 CVE; the actual advisory is GHSA-8g9c-4865-x492*). |
-| `next` (`16.3.6`) | **High** | [GHSA-3x5f-x526-w85f](https://github.com/advisories/GHSA-3x5f-x526-w85f) | Direct | RCE in Image Optimization component parsing external SVG files. |
-| `next` (`16.3.6`) | **High** | [GHSA-958v-mg94-f2m7](https://github.com/advisories/GHSA-958v-mg94-f2m7) | Direct | RCE in Image Optimization via crafted image payload. |
-| `next` (`16.3.6`) | **Moderate** | [GHSA-f3mh-rxg3-f5g2](https://github.com/advisories/GHSA-f3mh-rxg3-f5g2) | Direct | HttpOnly cookie exposure through internal response header on Next.js Edge runtime routes. |
-| `next` (`16.3.6`) | **Moderate** | [GHSA-pc58-hwjq-p385](https://github.com/advisories/GHSA-pc58-hwjq-p385) | Direct | Cross-client response injection and disclosure in self-hosted Next.js applications. |
-| `next` (`16.3.6`) | **Moderate** | [GHSA-rhh4-g77r-r9qj](https://github.com/advisories/GHSA-rhh4-g77r-r9qj) | Direct | Cross-user cache disclosure and poisoning in Next.js `use cache` with binary arguments. |
-| `sharp` (`<0.35.5`) | **High** | [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) | Transitive (via `next`) | Vulnerability in librsvg dependency (CVE-2026-96889). |
-| `source-map-js` (`1.0.0 - 1.2.1`) | **High** | [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) | Transitive (via `tailwindcss` / `postcss`) | Event-loop denial of service through indexed source-map section offsets (CVSS 7.5). |
-| `zod` (`<4.6.6`) | **High** | [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) | Transitive (via `next`) | Memory exhaustion while validating oversized constrained collections (CVSS 7.5). |
-| `dompurify` (`<=3.4.16`) | **Low** | [GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p), [GHSA-6688-9rhm-gjv2](https://github.com/advisories/GHSA-6688-9rhm-gjv2), [GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f), [GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7), [GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) | Transitive (via `@xyflow/react`) | Detached DOM hooks, force-removed rawtext roots, and SMIL attribute bypasses. |
-| `minimatch` / `@typescript-eslint` | **Moderate** | [GHSA-f8q6-p94x-37v3](https://github.com/advisories/GHSA-f8q6-p94x-37v3) | Transitive (dev) | Regular expression denial of service in path glob matching. |
+| `next` (`16.3.6`) | **Critical** | [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw), [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr) | Direct (`frontend/package.json`) | Unauthenticated Remote Code Execution in Image Optimization API when SVG files are used (`GHSA-2464-fhr4-w9xw`) and in `use cache` functions returning typed arrays (`GHSA-673q-mjm6-r5xr`), plus high-severity SSRF (`GHSA-cjq9-62q9-8jv4`) and DoS (`GHSA-p3m5-59mp-jv5r`). |
+| `sharp` (`0.34.5`) | **High** | [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) | Direct (`frontend/package.json`) | Vulnerability in librsvg dependency (CVE-2026-96889). |
+| `zod` (`4.3.6`) | **High** | [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) | Direct (`frontend/package.json`) | Memory exhaustion while validating oversized constrained collections (CVSS 7.5). |
+| `source-map-js` (`1.2.1`) | **High** | [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) | Transitive (via `postcss`) | Event-loop denial of service through indexed source-map section offsets (CVSS 7.5). |
+| `minimatch` (`9.0.5`) | **Moderate** | [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) | Transitive (via `@typescript-eslint/typescript-estree`) | Regular expression denial of service via globparts amplification. Propagates through 5 `@typescript-eslint/*` packages and `typescript-eslint`. |
+| `dompurify` (`3.4.16`) | **Low** | [GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p), [GHSA-6688-9rhm-gjv2](https://github.com/advisories/GHSA-6688-9rhm-gjv2), [GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f), [GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7), [GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) | Transitive (via `monaco-editor`) | Detached DOM hooks, force-removed rawtext roots, and SMIL attribute bypasses in DOMPurify. Propagates to `monaco-editor`. |
 
 ### Remediation Guidance & Dedicated Maintenance PR
 - **Recommended Action:** Upgrade Next.js to `>= 16.4.6` in `frontend/package.json` (resolving all direct Next.js advisories and updating transitive `sharp` and `zod`) and run `npm audit fix` in an isolated pull request following the merge of PR #29.

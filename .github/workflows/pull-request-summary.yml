@@ -7,9 +7,9 @@ on:
       - completed
 
 permissions:
-  pull-requests: write
-  issues: write
+  contents: read
   actions: read
+  issues: write
 
 concurrency:
   group: pr-summary-${{ github.event.workflow_run.id }}

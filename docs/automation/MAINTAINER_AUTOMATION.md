@@ -237,11 +237,27 @@ A comprehensive security audit of `frontend/package.json` and `frontend/package-
 > [!WARNING]
 > The frontend application is **not vulnerability-free**. Production dependency remediation is intentionally isolated from this maintainer automation PR to preserve frontend build stability and avoid regressions in AST visualization components.
 
-### Package Records vs. Security Advisories Distinction
+### Package Records vs. Security Advisories vs. Installed Instances
 
-`npm audit` reports vulnerabilities at two distinct levels:
-1. **Vulnerable Package Records (13 Total):** The audit metadata categorizes 13 distinct packages present in the local dependency tree according to their highest detected severity: **1 Critical, 3 High, 7 Moderate, 2 Low** (0 Info).
-2. **Security Advisories (25 Total):** Across these 13 packages, there are **25 distinct security advisories** (GHSA identifiers) documented in the official GitHub Advisory Database. A single package record may be subject to multiple distinct vulnerability advisories (e.g., `next` is affected by 16 advisories, and `dompurify` is affected by 5 advisories).
+`npm audit` reports vulnerabilities at three distinct analytical levels:
+1. **Vulnerable Package Records (13 Total):** The audit metadata categorizes 13 distinct package records present in the dependency tree according to the highest severity assigned to each package record:
+   - **1 Critical:** `next`
+   - **3 High:** `sharp`, `source-map-js`, `zod`
+   - **7 Moderate:** `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser`, `@typescript-eslint/type-utils`, `@typescript-eslint/typescript-estree`, `@typescript-eslint/utils`, `minimatch`, `typescript-eslint`
+   - **2 Low:** `dompurify`, `monaco-editor`
+   - *Total:* 13 package records.
+2. **Distinct Security Advisories (25 Total):** Across the dependency tree, there are **25 distinct security advisories** (GHSA identifiers) documented in the official GitHub Advisory Database:
+   - 16 advisories on `next`
+   - 5 advisories on `dompurify`
+   - 1 advisory on `minimatch`
+   - 1 advisory on `sharp`
+   - 1 advisory on `source-map-js`
+   - 1 advisory on `zod`
+   - *Total:* 25 distinct advisory identifiers.
+3. **Installed Package Instances:** A package may appear at multiple locations in `frontend/package-lock.json`. For example, `minimatch` exists in two separate locations:
+   - Root instance: `node_modules/minimatch` (version `3.1.5`).
+   - Nested instance: `node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch` (version `10.2.6`).
+   Only instances whose installed version matches an advisory's affected range are vulnerable.
 
 ### Dependency Classification Invariant
 
@@ -251,19 +267,54 @@ In `frontend/package.json`, only **`next` (`16.3.6`)** is declared as a direct d
 
 | Package Name | Installed Version | Severity | Dependency Status | Actual Dependency Path | Advisory Identifiers | Affected Range | Available Fix Information |
 |---|---|---|---|---|---|---|---|
-| `next` | `16.3.6` | **Critical** | **Direct** (`frontend/package.json`) | `dependencies.next` | [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw) (Critical RCE in SVG optimization), [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr) (Critical RCE in `use cache`), [GHSA-cjq9-62q9-8jv4](https://github.com/advisories/GHSA-cjq9-62q9-8jv4) (High SSRF), [GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) (High DoS), plus 12 Moderate/Low advisories | `>=16.0.0 <=16.4.0` | Upgrade to `next@16.4.6` (semver non-breaking) |
-| `sharp` | `0.34.5` | **High** | **Transitive** | `next` &rarr; `sharp` | [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) (librsvg CVE-2026-96889) | `<0.35.5` | Upgrade `next` to `>=16.4.6` or update lockfile |
+| `next` | `16.3.6` | **Critical** | **Direct** (`frontend/package.json`) | `dependencies.next` | 16 distinct GHSA advisories (detailed below), including Critical RCE [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw) & [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr), High SSRF [GHSA-cjq9-62q9-8jv4](https://github.com/advisories/GHSA-cjq9-62q9-8jv4), and High DoS [GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) | `>=16.0.0 <=16.4.0` (critical range) | Upgrade to `next@16.4.6` (semver non-breaking) |
+| `sharp` | `0.35.4` | **High** | **Transitive** | `next` &rarr; `sharp` | [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) (librsvg CVE-2026-96889) | `<0.35.5` | Upgrade `next` to `>=16.4.6` or update lockfile |
 | `zod` | `4.6.5` | **High** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `eslint-plugin-react-hooks` &rarr; `zod` | [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (Memory exhaustion) | `<4.6.6` | Update `eslint-config-next` / `eslint-plugin-react-hooks` |
 | `source-map-js` | `1.2.1` | **High** | **Transitive** | `devDependencies.@tailwindcss/postcss` &rarr; `@tailwindcss/node` &rarr; `source-map-js` (and `postcss`) | [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) (Event-loop DoS) | `>=1.0.0 <1.2.2` | Update `@tailwindcss/postcss` / `postcss` |
-| `minimatch` | `3.1.5` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/typescript-estree` &rarr; `minimatch` | [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (DoS via globparts amplification) | `>=7.0.0 <11.0.1` | Update `eslint-config-next` / `@typescript-eslint/*` |
-| `@typescript-eslint/typescript-estree` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/typescript-estree` | Affected transitively via `minimatch` | N/A | Update `eslint-config-next` |
+| `minimatch` | `10.2.6` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/typescript-estree` &rarr; `node_modules/@typescript-eslint/typescript-estree/node_modules/minimatch` | [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (DoS via globparts amplification). *Note: Root `minimatch@3.1.5` is outside the affected range and not affected.* | `>=7.0.0 <11.0.1` | Update `eslint-config-next` / `@typescript-eslint/*` |
+| `@typescript-eslint/typescript-estree` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/typescript-estree` | Affected transitively via `minimatch@10.2.6` | N/A | Update `eslint-config-next` |
 | `@typescript-eslint/parser` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/parser` | Affected transitively via `@typescript-eslint/typescript-estree` | N/A | Update `eslint-config-next` |
 | `@typescript-eslint/type-utils` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/type-utils` | Affected transitively via `@typescript-eslint/typescript-estree` | N/A | Update `eslint-config-next` |
 | `@typescript-eslint/utils` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/utils` | Affected transitively via `@typescript-eslint/typescript-estree` | N/A | Update `eslint-config-next` |
 | `@typescript-eslint/eslint-plugin` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` &rarr; `@typescript-eslint/eslint-plugin` | Affected transitively via `@typescript-eslint/type-utils`, `@typescript-eslint/utils` | N/A | Update `eslint-config-next` |
 | `typescript-eslint` | `8.70.1` | **Moderate** | **Transitive** | `devDependencies.eslint-config-next` &rarr; `typescript-eslint` | Affected transitively via `@typescript-eslint/*` | N/A | Update `eslint-config-next` |
-| `dompurify` | `3.4.15` | **Low** | **Transitive** | `dependencies.@monaco-editor/react` &rarr; `monaco-editor` &rarr; `dompurify` | [GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p), [GHSA-6688-9rhm-gjv2](https://github.com/advisories/GHSA-6688-9rhm-gjv2), [GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f), [GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7), [GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) | `<=3.4.16` | Update `monaco-editor` |
-| `monaco-editor` | `0.57.0` | **Low** | **Transitive** | `dependencies.@monaco-editor/react` &rarr; `monaco-editor` | Affected transitively via `dompurify` | N/A | Update `@monaco-editor/react` / `monaco-editor` |
+| `dompurify` | `3.4.15` | **Low** | **Transitive** | `dependencies.@monaco-editor/react` &rarr; `monaco-editor` &rarr; `dompurify` | 5 distinct GHSA advisories (detailed below) | `<=3.4.16` | Update `monaco-editor` |
+| `monaco-editor` | `0.57.0` | **Low** | **Transitive** | `dependencies.@monaco-editor/react` &rarr; `monaco-editor` | Affected transitively via `dompurify@3.4.15` | N/A | Update `@monaco-editor/react` / `monaco-editor` |
+
+### Complete Next.js Security Advisory Breakdown (All 16 Advisories)
+
+All 16 advisories affecting the installed `next@16.3.6` release extracted from `npm audit --json`:
+
+| Advisory Identifier | Severity | Affected Version Range | Advisory Title & Vulnerability Description |
+|---|---|---|---|
+| [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw) | **Critical** | `>=16.0.0 <=16.4.0` | Unauthenticated Remote Code Execution in Image Optimization API when SVG files are used |
+| [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr) | **Critical** | `>=16.0.0 <=16.4.0` | Unauthenticated Remote Code Execution in `use cache` functions returning typed arrays |
+| [GHSA-cjq9-62q9-8jv4](https://github.com/advisories/GHSA-cjq9-62q9-8jv4) | **High** | `>=16.0.0 <16.3.8` | Server-Side Request Forgery in Image Optimization |
+| [GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) | **High** | `>=16.0.0 <=16.4.0` | Denial of Service in App Router using Server Actions |
+| [GHSA-3w37-wq28-93x7](https://github.com/advisories/GHSA-3w37-wq28-93x7) | **Moderate** | `>=16.3.0 <16.3.8` | Pending `use cache` fill can leak Draft Mode content into regular responses and persisted pages |
+| [GHSA-4jqv-mc3x-m676](https://github.com/advisories/GHSA-4jqv-mc3x-m676) | **Moderate** | `>=16.0.0 <16.3.8` | Cache poisoning of SSG and ISR pages in self-hosted applications |
+| [GHSA-f87g-xv8r-7p7x](https://github.com/advisories/GHSA-f87g-xv8r-7p7x) | **Moderate** | `>=16.0.0 <16.3.8` | Information disclosure in App Router metadata image routes via dynamicParams bypass |
+| [GHSA-mcj8-r9mp-w47p](https://github.com/advisories/GHSA-mcj8-r9mp-w47p) | **Moderate** | `>=16.0.0 <16.3.8` | Cache poisoning in SSG/ISR rendering leading to cross-user content substitution and DoS |
+| [GHSA-h694-7cp9-m8p3](https://github.com/advisories/GHSA-h694-7cp9-m8p3) | **Moderate** | `>=16.3.0 <16.3.8` | Cache leak across root param values in nested `use cache` functions |
+| [GHSA-mfr8-8qww-v76h](https://github.com/advisories/GHSA-mfr8-8qww-v76h) | **Moderate** | `>=16.3.0 <=16.4.4` | Information disclosure across root params when `use cache` function is called through `unstable_cache()` |
+| [GHSA-vc7v-qv4w-wrv8](https://github.com/advisories/GHSA-vc7v-qv4w-wrv8) | **Moderate** | `>=16.2.0 <=16.4.4` | Cache leak across root param values in nested `use cache` functions via delayed inner stream metadata |
+| [GHSA-7qx7-33qx-rqx2](https://github.com/advisories/GHSA-7qx7-33qx-rqx2) | **Moderate** | `>=16.0.0 <=16.4.4` | SVG rejection bypass in image optimization |
+| [GHSA-f3mh-rxg3-f5g2](https://github.com/advisories/GHSA-f3mh-rxg3-f5g2) | **Moderate** | `>=16.0.0 <=16.4.4` | HttpOnly cookie exposure through internal response header on Next.js Edge runtime routes |
+| [GHSA-pc58-hwjq-p385](https://github.com/advisories/GHSA-pc58-hwjq-p385) | **Moderate** | `>=16.0.0 <=16.4.4` | Cross-client response injection and disclosure in self-hosted Next.js applications |
+| [GHSA-rhh4-g77r-r9qj](https://github.com/advisories/GHSA-rhh4-g77r-r9qj) | **Moderate** | `>=16.0.0 <=16.4.4` | Cross-user cache disclosure and poisoning in Next.js `use cache` with binary arguments |
+| [GHSA-39w2-rjm5-chcv](https://github.com/advisories/GHSA-39w2-rjm5-chcv) | **Low** | `>=16.0.0 <16.3.8` | Information disclosure in development server's Model Context Protocol endpoint |
+
+### Complete DOMPurify Security Advisory Breakdown (All 5 Advisories)
+
+All 5 advisories affecting `dompurify@3.4.15` (transitive via `monaco-editor`):
+
+| Advisory Identifier | Severity | Affected Version Range | Advisory Title & Vulnerability Description |
+|---|---|---|---|
+| [GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p) | **Low** | `>=3.4.13 <=3.4.15` | IN_PLACE: node-removing afterSanitize hook leaves detached subtree event handlers armed (DOM XSS) |
+| [GHSA-6688-9rhm-gjv2](https://github.com/advisories/GHSA-6688-9rhm-gjv2) | **Low** | `<=3.4.15` | IN_PLACE returns a force-removed rawtext root whose text carries attacker markup (HTML reparse executes) |
+| [GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f) | **Low** | `<=3.4.16` | SMIL `attributeName=href` guard is skipped when PARSER_MEDIA_TYPE is `application/xhtml+xml` |
+| [GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7) | **Low** | `>=3.4.4 <=3.4.16` | SAFE_FOR_TEMPLATES bypass: split template expressions survive in attached shadow root content |
+| [GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) | **Low** | `<=3.4.16` | IN_PLACE: hook removing parent/sibling leaves detached subtree handlers armed (incomplete fix) |
 
 ### Remediation Guidance & Dedicated Maintenance PR
 - **Recommended Action:** Upgrade Next.js to `>= 16.4.6` in `frontend/package.json` (resolving all direct Next.js advisories and updating transitive `sharp`) and update lockfile dependencies in an isolated pull request following the merge of PR #29.

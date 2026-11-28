@@ -17,7 +17,11 @@ export const metadata: Metadata = {
   description: "Python AST static complexity analysis, Halstead software science, CFG cyclomatic metrics, and asymptotic Big-O derivation.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html
       lang="en"

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -6,6 +8,7 @@ from app.db.database import get_db
 from app.core.config import settings
 
 router = APIRouter(prefix="/health", tags=["Health"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", summary="Health and database connectivity check")
@@ -23,8 +26,9 @@ def health_check(db: Session = Depends(get_db)):
             db_type = "SQLite (Local fallback)"
         else:
             db_type = "Relational DB"
-    except Exception as e:
-        error_msg = str(e)
+    except Exception:
+        logger.exception("Database connectivity check failed")
+        error_msg = "Database connection failed"
 
     return {
         "status": "healthy" if db_connected else "degraded",

@@ -10,15 +10,19 @@ function makeValidPrBody({
   noCopiedConfirmed = true,
   problem = 'Linear recurrence solver returns O(1) for recursive factorial step.',
   summary = 'Updated recurrence tree visitor to correctly recognize linear step functions.',
-  verification = 'uv run pytest tests/test_recurrence_regression.py -v'
+  verification = 'uv run pytest tests/test_recurrence_regression.py -v',
+  customAiSection = null,
+  extraVerificationContent = ''
 } = {}) {
-  const aiSection = aiChoice === 'No'
-    ? '- [x] No\n- [ ] Yes (please disclose tools used and extent of assistance below):'
-    : (aiChoice === 'Yes'
-      ? '- [ ] No\n- [x] Yes (Assisted with test docstrings):\nUsed Claude for test docstrings'
-      : (aiChoice === 'Both'
-        ? '- [x] No\n- [x] Yes'
-        : '- [ ] No\n- [ ] Yes'));
+  const aiSection = customAiSection !== null
+    ? customAiSection
+    : (aiChoice === 'No'
+      ? '- [x] No\n- [ ] Yes (please disclose tools used and extent of assistance below):'
+      : (aiChoice === 'Yes'
+        ? '- [ ] No\n- [x] Yes (Assisted with test docstrings):\nUsed Claude for test docstrings'
+        : (aiChoice === 'Both'
+          ? '- [x] No\n- [x] Yes'
+          : '- [ ] No\n- [ ] Yes')));
 
   return `## Description
 
@@ -51,6 +55,7 @@ ${verification}
 
 ### Verification Outcome
 - [x] Backend test(s) executed
+${extraVerificationContent}
 
 ---
 
@@ -492,5 +497,325 @@ describe('PR Policy API Evaluation & Fail-Closed Behavior', () => {
     const report = await evaluatePullRequestWithApi({ client, event });
 
     assert.equal(report.valid, true);
+  });
+});
+
+describe('AI Assistance Disclosure Precision and Edge Cases (Phase D)', () => {
+  // 1. Only No selected -> Pass
+  test('1. Only No selected passes validation', () => {
+    const pr = makePr({ body: makeValidPrBody({ aiChoice: 'No' }) });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+  });
+
+  test('1b. Only No selected with No checkbox alone (Yes omitted) passes validation', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [x] No'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+  });
+
+  // 2. Only Yes selected with meaningful disclosure -> Pass
+  test('2. Only Yes selected with meaningful disclosure passes validation', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [x] Yes: Claude 3.5 Sonnet helped draft the test docstrings.'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+  });
+
+  // 3. Neither option selected -> Fail
+  test('3. Neither option selected fails validation', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [ ] Yes (please disclose tools used and extent of assistance below):'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /neither `No` nor `Yes` is checked/i);
+  });
+
+  // 4. Both options selected -> Fail
+  test('4. Both options selected fails validation', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [x] No\n- [x] Yes: Used ChatGPT to explain algorithm'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /both `No` and `Yes` are checked/i);
+  });
+
+  // 5. Not applicable (no UI changes) checked elsewhere must not count as No
+  test('5. Not applicable (no UI changes) checked elsewhere must not count as No', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        extraVerificationContent: '### UI Changes & Visual Proof\n- [x] Not applicable (no UI changes).',
+        customAiSection: '- [ ] No\n- [ ] Yes (please disclose tools used and extent of assistance below):'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /neither `No` nor `Yes` is checked/i);
+  });
+
+  // 6. Not applicable checked and neither AI option selected -> Fail
+  test('6. Not applicable checked and neither AI option selected fails', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        extraVerificationContent: '### UI Changes & Visual Proof\n- [x] Not applicable (no UI changes).',
+        aiChoice: 'None'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /neither `No` nor `Yes` is checked/i);
+  });
+
+  // 7. Not applicable checked and valid Yes selected -> Pass
+  test('7. Not applicable checked and valid Yes selected passes', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        extraVerificationContent: '### UI Changes & Visual Proof\n- [x] Not applicable (no UI changes).',
+        customAiSection: '- [ ] No\n- [x] Yes (please disclose tools used and extent of assistance below): Muse (Meta) helped draft this change; I checked the result myself before submitting.'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+  });
+
+  // 8. Yes selected without disclosure details -> Fail
+  test('8. Yes selected without disclosure details fails', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [x] Yes'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /no meaningful disclosure details were provided/i);
+  });
+
+  // 9. Yes selected with only template placeholder text -> Fail
+  test('9. Yes selected with only template placeholder text fails', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [x] Yes (please disclose tools used and extent of assistance below):'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /no meaningful disclosure details were provided/i);
+  });
+
+  // 10. Yes selected with meaningful details on the same line -> Pass
+  test('10. Yes selected with meaningful details on the same line passes', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [x] Yes (please disclose tools used and extent of assistance below): GitHub Copilot assisted with regex pattern syntax.'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+  });
+
+  // 11. Yes selected with meaningful details on subsequent lines -> Pass
+  test('11. Yes selected with meaningful details on subsequent lines passes', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [x] Yes (please disclose tools used and extent of assistance below):\n  Used GitHub Copilot for boilerplate recurrence relation traversal; verified manually.'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+  });
+
+  // 12. AI disclosure section missing or malformed -> Fail safely
+  test('12a. AI disclosure section missing entirely fails safely', () => {
+    const baseBody = makeValidPrBody();
+    const bodyWithoutAi = baseBody.replace(/## AI Assistance Disclosure[\s\S]*$/, '');
+    const pr = makePr({ body: bodyWithoutAi });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /AI Assistance Disclosure section is missing/i);
+    assert.match(result.errors.join(' '), /AI Disclosure confirmation missing/i);
+  });
+
+  test('12b. AI disclosure section malformed with no options fails safely', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: 'No checkboxes were provided here.'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /malformed: no `No` or `Yes` options found/i);
+  });
+
+  // 13. AI disclosure option duplicated ambiguously -> Fail safely
+  test('13a. Duplicate No options fail safely with ambiguity error', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [x] No\n- [ ] No\n- [ ] Yes (please disclose tools used and extent of assistance below):'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /duplicate AI disclosure options found/i);
+  });
+
+  test('13b. Duplicate Yes options fail safely with ambiguity error', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [x] Yes: Tool A\n- [x] Yes: Tool B'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /duplicate AI disclosure options found/i);
+  });
+
+  // Additional edge cases: comments only as disclosure, word starting with No
+  test('14. Yes with only markdown comments or whitespace fails', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [ ] No\n- [x] Yes (please disclose tools used and extent of assistance below):\n  <!-- Used Copilot -->\n  '
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /no meaningful disclosure details were provided/i);
+  });
+
+  test('15. Checkbox starting with word like None or Normal is not treated as No', () => {
+    const pr = makePr({
+      body: makeValidPrBody({
+        customAiSection: '- [x] None of the above\n- [ ] Yes (please disclose tools used and extent of assistance below):'
+      })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /neither `No` nor `Yes` is checked/i);
   });
 });

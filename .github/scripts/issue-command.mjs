@@ -1,6 +1,9 @@
 /**
  * Main issue and pull request command processor for GitHub Actions.
- * Handles /claim, /assign, /unclaim, /help, /status, and /level commands.
+ * Handles /claim, /assign, /unclaim, /help, /status, and maintainer /level commands.
+ *
+ * Implements hardened pagination, single-contributor concurrency verification,
+ * and reliable policy re-evaluation dispatch.
  */
 
 import { parseCommand, extractLinkedIssueNumber } from './lib/command-parser.mjs';
@@ -78,16 +81,43 @@ export function createGitHubClient(token, repoFull, fetchFn = globalThis.fetch) 
         body: JSON.stringify({ assignees })
       });
     },
+    /**
+     * Paginates through all open issues assigned to a username to count active WOCS issues.
+     * Excludes pull requests and non-WOCS issues.
+     */
     async listOpenWocsIssuesForAssignee(username) {
-      // Query open issues assigned to username
-      const issues = await request(`/repos/${owner}/${repo}/issues?state=open&assignee=${encodeURIComponent(username)}&per_page=100`);
-      if (!Array.isArray(issues)) return [];
-      // Filter out pull requests and require 'wocs' label
-      return issues.filter(item => {
-        if (item.pull_request) return false;
-        const labels = item.labels || [];
-        return labels.some(l => (typeof l === 'string' ? l : l.name) === 'wocs');
-      });
+      const allWocsIssues = [];
+      let page = 1;
+      const perPage = 100;
+
+      while (true) {
+        let issues;
+        try {
+          issues = await request(`/repos/${owner}/${repo}/issues?state=open&assignee=${encodeURIComponent(username)}&per_page=${perPage}&page=${page}`);
+        } catch (err) {
+          throw new Error(`Failed to query open issues for @${username} on page ${page}: ${err.message}`);
+        }
+
+        if (!Array.isArray(issues) || issues.length === 0) {
+          break;
+        }
+
+        for (const item of issues) {
+          if (item.pull_request) continue;
+          const labels = item.labels || [];
+          const hasWocs = labels.some(l => (typeof l === 'string' ? l : l.name) === 'wocs');
+          if (hasWocs) {
+            allWocsIssues.push(item);
+          }
+        }
+
+        if (issues.length < perPage) {
+          break;
+        }
+        page++;
+      }
+
+      return allWocsIssues;
     },
     async getCollaboratorPermission(username) {
       try {
@@ -117,6 +147,13 @@ export function createGitHubClient(token, repoFull, fetchFn = globalThis.fetch) 
         if (err.status === 404) return null; // Label already not present
         throw err;
       }
+    },
+    async dispatchWorkflow(workflowId, ref, inputs = {}) {
+      return request(`/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/dispatches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref, inputs })
+      });
     }
   };
 }
@@ -159,7 +196,6 @@ export async function handleIssueComment({ client, event }) {
   // ==========================================
   if (isPullRequest) {
     if (command === 'claim' || command === 'assign' || command === 'unclaim') {
-      // Assignment commands are not processed on pull requests
       return { handled: false, reason: 'Assignment commands are not processed on pull requests' };
     }
 
@@ -169,7 +205,7 @@ export async function handleIssueComment({ client, event }) {
     }
 
     if (command === 'status') {
-      await client.createComment(issueNumber, 'The `/status` command is only available on issues. For pull requests, review the GitHub Actions checks.');
+      await client.createComment(issueNumber, 'The `/status` command is only available on issues. For pull requests, review the GitHub Actions status checks.');
       return { handled: true, action: 'status_on_pr' };
     }
 
@@ -250,8 +286,19 @@ export async function handleIssueComment({ client, event }) {
       // Add exact wocs and target level
       await client.addLabels(issueNumber, ['wocs', `level ${targetLevel}`]);
 
+      // Re-evaluate policy via workflow_dispatch
+      let reevalStatus = 'initiated';
+      try {
+        await client.dispatchWorkflow('pull-request-policy.yml', pr.base?.ref || 'main', {
+          pr_number: issueNumber
+        });
+      } catch (dispatchErr) {
+        console.warn(`Could not dispatch pull-request-policy.yml: ${dispatchErr.message}`);
+        reevalStatus = 'manual';
+      }
+
       // Publish confirmation
-      await client.createComment(issueNumber, templates.levelSuccess(commentAuthor, targetLevel));
+      await client.createComment(issueNumber, templates.levelSuccess(commentAuthor, targetLevel, reevalStatus));
       return { handled: true, action: `level_${targetLevel}_applied` };
     }
   }
@@ -301,6 +348,25 @@ export async function handleIssueComment({ client, event }) {
       claimBlockReason = 'Conflicting difficulty labels present';
     }
 
+    // Evaluate requester-specific eligibility under two-active-issue limit
+    let requesterActiveCount = 0;
+    let requesterEligible = true;
+    let requesterBlockReason = '';
+
+    try {
+      const activeWocs = await client.listOpenWocsIssuesForAssignee(commentAuthor);
+      const otherActive = activeWocs.filter(i => i.number !== issueNumber);
+      requesterActiveCount = otherActive.length;
+
+      if (requesterActiveCount >= 2) {
+        requesterEligible = false;
+        requesterBlockReason = `You currently have ${requesterActiveCount} active WOCS issues assigned (maximum limit: 2)`;
+      }
+    } catch (err) {
+      requesterEligible = false;
+      requesterBlockReason = `Could not verify your active issue count (${err.message})`;
+    }
+
     await client.createComment(
       issueNumber,
       templates.statusResponse({
@@ -310,7 +376,11 @@ export async function handleIssueComment({ client, event }) {
         isWocs,
         difficultyLevels,
         canClaim,
-        claimBlockReason
+        claimBlockReason,
+        requester: commentAuthor,
+        requesterActiveCount,
+        requesterEligible,
+        requesterBlockReason
       })
     );
     return { handled: true, action: 'status' };
@@ -396,8 +466,18 @@ export async function handleIssueComment({ client, event }) {
       return { handled: true, action: 'claim_rejected_conflicting_levels' };
     }
 
-    // 6. Verify 2-active-WOCS-issues limit
-    const activeWocsIssues = await client.listOpenWocsIssuesForAssignee(commentAuthor);
+    // 6. Verify 2-active-WOCS-issues limit with reliable pagination
+    let activeWocsIssues;
+    try {
+      activeWocsIssues = await client.listOpenWocsIssuesForAssignee(commentAuthor);
+    } catch (err) {
+      await client.createComment(
+        issueNumber,
+        `Hi @${commentAuthor}, could not verify your active issue count due to a GitHub API error (${err.message}). Please try again shortly or contact a maintainer.`
+      );
+      return { handled: true, action: 'claim_failed_pagination_error' };
+    }
+
     // Exclude current issue if somehow already returned
     const otherActiveIssues = activeWocsIssues.filter(i => i.number !== issueNumber);
 

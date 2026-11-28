@@ -2,6 +2,8 @@
  * Pull request policy validator.
  * Validates PR target branch, linked issue assignment, PR template completion,
  * AI disclosures, and WOCS labels.
+ *
+ * Implements hardened security checks and narrow owner-authored maintenance exemption.
  */
 
 import { extractLinkedIssueNumber } from './lib/command-parser.mjs';
@@ -49,10 +51,26 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
 
   const body = pr.body || '';
 
+  // Determine WOCS context
+  const activePrLabels = prLabels.map(l => (typeof l === 'string' ? l : l.name));
+  const hasWocsLabel = activePrLabels.includes('wocs');
+  const issueLabels = linkedIssue ? (linkedIssue.labels || []).map(l => (typeof l === 'string' ? l : l.name)) : [];
+  const isWocsIssue = issueLabels.includes('wocs');
+  const isWocs = hasWocsLabel || isWocsIssue;
+
+  // Narrow Owner-Authored Non-WOCS Maintenance Exemption
+  // Relies exclusively on GitHub-provided trusted author_association
+  const isOwner = pr.author_association === 'OWNER';
+  const isOwnerMaintenance = isOwner && !isWocs;
+
   // 3. Linked Issue Reference
   const linkedIssueNumber = extractLinkedIssueNumber(body);
   if (!linkedIssueNumber) {
-    errors.push('No linked issue reference found in PR description. PR must reference an issue using `Closes #<number>`, `Fixes #<number>`, or `Resolves #<number>`.');
+    if (isOwnerMaintenance) {
+      warnings.push('Owner-authored non-WOCS maintenance PR: linked issue reference is exempt.');
+    } else {
+      errors.push('No linked issue reference found in PR description. PR must reference an issue using `Closes #<number>`, `Fixes #<number>`, or `Resolves #<number>`.');
+    }
   } else if (!linkedIssue) {
     errors.push(`Linked issue #${linkedIssueNumber} could not be found or verified.`);
   } else {
@@ -69,10 +87,14 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
     const prAuthor = pr.user?.login;
     const assignees = (linkedIssue.assignees || []).map(a => a.login);
     if (!assignees.includes(prAuthor)) {
-      if (assignees.length === 0) {
-        errors.push(`Linked issue #${linkedIssueNumber} is unassigned. PR author @${prAuthor} must be formally assigned before submitting a PR.`);
+      if (isOwnerMaintenance) {
+        warnings.push(`Owner-authored non-WOCS maintenance PR: issue assignment requirement on #${linkedIssueNumber} is exempt.`);
       } else {
-        errors.push(`Linked issue #${linkedIssueNumber} is assigned to @${assignees.join(', @')}, not PR author @${prAuthor}.`);
+        if (assignees.length === 0) {
+          errors.push(`Linked issue #${linkedIssueNumber} is unassigned. PR author @${prAuthor} must be formally assigned before submitting a PR.`);
+        } else {
+          errors.push(`Linked issue #${linkedIssueNumber} is assigned to @${assignees.join(', @')}, not PR author @${prAuthor}.`);
+        }
       }
     }
   }
@@ -81,10 +103,14 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
   // Pattern: - [x] I confirm that this issue was formally assigned to me
   const assignmentConfirmed = /- \[[xX]\]\s*I confirm that this issue was formally assigned to me/i.test(body);
   if (!assignmentConfirmed) {
-    errors.push('Issue Assignment Confirmation checkbox is not checked. Please check the confirmation in the PR description.');
+    if (isOwnerMaintenance) {
+      warnings.push('Owner-authored non-WOCS maintenance PR: issue assignment confirmation checkbox is exempt.');
+    } else {
+      errors.push('Issue Assignment Confirmation checkbox is not checked. Please check the confirmation in the PR description.');
+    }
   }
 
-  // 7. Template Section: AI Assistance Disclosure
+  // 7. Template Section: AI Assistance Disclosure (ALWAYS ENFORCED FOR ALL CONTRIBUTORS AND OWNER)
   // - [x] No OR - [x] Yes
   const aiNoChecked = /- \[[xX]\]\s*No/i.test(body);
   const aiYesChecked = /- \[[xX]\]\s*Yes/i.test(body);
@@ -95,7 +121,7 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
     errors.push('AI Assistance Disclosure is ambiguous: both `No` and `Yes` are checked. Please select exactly one.');
   }
 
-  // Sub-confirmations for AI disclosure
+  // Sub-confirmations for AI disclosure (ALWAYS ENFORCED)
   const understandConfirmed = /- \[[xX]\]\s*I confirm that I understand, have personally verified, and can explain every line/i.test(body);
   if (!understandConfirmed) {
     errors.push('AI Disclosure confirmation missing: "I confirm that I understand, have personally verified, and can explain every line of code..." must be checked.');
@@ -106,7 +132,7 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
     errors.push('AI Disclosure confirmation missing: "I confirm that this contribution contains no mass-generated, copied, or unverified code" must be checked.');
   }
 
-  // 8. Description content validation: Problem Addressed & Summary of Changes
+  // 8. Description content validation: Problem Addressed & Summary of Changes (ALWAYS ENFORCED)
   const problemMatch = body.match(/### Problem Addressed\s*([\s\S]*?)(?=### Summary of Changes|$)/i);
   const problemText = problemMatch ? stripMarkdownComments(problemMatch[1]) : '';
   if (problemText.length < 10) {
@@ -119,7 +145,7 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
     errors.push('Summary of Changes section is empty or contains only template placeholder text. Please summarize your changes.');
   }
 
-  // 9. Verification Info
+  // 9. Verification Info (ALWAYS ENFORCED)
   const verificationMatch = body.match(/### Verification Commands & Environment\s*([\s\S]*?)(?=### Verification Outcome|$)/i);
   let verificationText = verificationMatch ? stripMarkdownComments(verificationMatch[1]) : '';
   // Strip code block backticks (e.g. ```powershell ... ```) to inspect actual commands
@@ -128,25 +154,17 @@ export function validatePullRequestPolicy({ pr, linkedIssue, prLabels = [] }) {
     errors.push('Verification Commands & Environment section is empty. Please provide the commands used to test your contribution.');
   }
 
-  // 10. WOCS Label Validation (if linked issue is a WOCS issue)
-  if (linkedIssue) {
-    const issueLabels = (linkedIssue.labels || []).map(l => (typeof l === 'string' ? l : l.name));
-    const isWocsIssue = issueLabels.includes('wocs');
+  // 10. WOCS Label Validation (if linked issue is a WOCS issue, or PR has WOCS label)
+  if (isWocs) {
+    if (!hasWocsLabel) {
+      errors.push('PR is missing the mandatory `wocs` label. An authorized maintainer or mentor must apply WOCS labels using `/level 1`, `/level 2`, or `/level 3`.');
+    }
 
-    if (isWocsIssue) {
-      const activePrLabels = prLabels.map(l => (typeof l === 'string' ? l : l.name));
-      const hasWocsLabel = activePrLabels.includes('wocs');
-      const difficultyLabels = activePrLabels.filter(l => VALID_WOCS_LEVELS.includes(l));
-
-      if (!hasWocsLabel) {
-        errors.push('PR is missing the mandatory `wocs` label. An authorized maintainer or mentor must apply WOCS labels using `/level 1`, `/level 2`, or `/level 3`.');
-      }
-
-      if (difficultyLabels.length === 0) {
-        errors.push('PR is missing a difficulty level label (`level 1`, `level 2`, or `level 3`). An authorized maintainer must review the code and apply the level using `/level 1`, `/level 2`, or `/level 3`.');
-      } else if (difficultyLabels.length > 1) {
-        errors.push(`PR has multiple conflicting difficulty labels (\`${difficultyLabels.join(', ')}\`). An authorized maintainer must resolve these using \`/level <number>\`.`);
-      }
+    const difficultyLabels = activePrLabels.filter(l => VALID_WOCS_LEVELS.includes(l));
+    if (difficultyLabels.length === 0) {
+      errors.push('PR is missing a difficulty level label (`level 1`, `level 2`, or `level 3`). An authorized maintainer must review the code and apply the level using `/level 1`, `/level 2`, or `/level 3`.');
+    } else if (difficultyLabels.length > 1) {
+      errors.push(`PR has multiple conflicting difficulty labels (\`${difficultyLabels.join(', ')}\`). An authorized maintainer must resolve these using \`/level <number>\`.`);
     }
   }
 
@@ -174,14 +192,35 @@ if (process.env.GITHUB_EVENT_PATH && process.argv[1]?.endsWith('pr-policy.mjs'))
       }
 
       const client = createGitHubClient(token, repo);
-      const pr = event.pull_request;
+
+      // Support pull_request_target event payload OR workflow_dispatch with DISPATCH_PR_NUMBER
+      let pr = event.pull_request;
+      const dispatchPrNum = process.env.DISPATCH_PR_NUMBER || event.inputs?.pr_number;
+      if (!pr && dispatchPrNum) {
+        const num = parseInt(dispatchPrNum, 10);
+        if (isNaN(num)) {
+          console.error(`Invalid dispatch PR number: ${dispatchPrNum}`);
+          process.exit(1);
+        }
+        pr = await client.getPullRequest(num);
+      }
+
       if (!pr) {
-        console.error('No pull_request found in event payload');
+        console.error('No pull_request found in event payload or workflow_dispatch inputs');
         process.exit(1);
       }
 
+      // Fetch fresh PR details to ensure latest labels and association
+      const prNumber = pr.number;
+      let freshPr = pr;
+      try {
+        freshPr = await client.getPullRequest(prNumber);
+      } catch (err) {
+        console.warn(`Could not refresh PR #${prNumber} details (${err.message}), using event payload`);
+      }
+
       // Fetch linked issue if referenced
-      const linkedNum = extractLinkedIssueNumber(pr.body);
+      const linkedNum = extractLinkedIssueNumber(freshPr.body);
       let linkedIssue = null;
       if (linkedNum) {
         try {
@@ -191,10 +230,10 @@ if (process.env.GITHUB_EVENT_PATH && process.argv[1]?.endsWith('pr-policy.mjs'))
         }
       }
 
-      const prLabels = (pr.labels || []).map(l => (typeof l === 'string' ? l : l.name));
-      const report = validatePullRequestPolicy({ pr, linkedIssue, prLabels });
+      const prLabels = (freshPr.labels || []).map(l => (typeof l === 'string' ? l : l.name));
+      const report = validatePullRequestPolicy({ pr: freshPr, linkedIssue, prLabels });
 
-      console.log('--- PULL REQUEST POLICY REPORT ---');
+      console.log(`--- PULL REQUEST POLICY REPORT (PR #${prNumber}) ---`);
       if (report.isDraft) {
         console.log('Status: DRAFT PR (final validation deferred)');
         process.exit(0);
@@ -202,7 +241,7 @@ if (process.env.GITHUB_EVENT_PATH && process.argv[1]?.endsWith('pr-policy.mjs'))
 
       if (report.warnings.length > 0) {
         console.log('Warnings:');
-        report.warnings.forEach(w => console.log(`  - ${w}`));
+        report.warnings.forEach(w => console.log(`  ⚠ ${w}`));
       }
 
       if (!report.valid) {

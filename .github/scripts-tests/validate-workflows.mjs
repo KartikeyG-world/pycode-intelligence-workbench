@@ -16,11 +16,36 @@ function validateWorkflows() {
     console.log(`\nChecking ${filePath}:`);
 
     // 1. Check for pull_request_target
-    if (content.includes('pull_request_target')) {
-      console.error(`  ❌ Forbidden trigger: pull_request_target detected!`);
+    if (file === 'pull-request-policy.yml') {
+      if (content.includes('pull_request_target')) {
+        // Verify hardening: must checkout trusted base_ref and never PR head sha
+        const hasBaseRefCheckout = content.includes('ref: ${{ github.base_ref || github.event.repository.default_branch }}');
+        const hasHeadShaCheckout = content.includes('head.sha');
+        if (hasBaseRefCheckout && !hasHeadShaCheckout) {
+          console.log(`  ✔ Hardened pull_request_target used (executes only trusted base ref, no PR code checkout)`);
+        } else {
+          console.error(`  ❌ Insecure pull_request_target: must checkout base_ref only, never untrusted head SHA!`);
+          hasErrors = true;
+        }
+      } else {
+        console.error(`  ❌ pull-request-policy.yml expected to use hardened pull_request_target!`);
+        hasErrors = true;
+      }
+    } else if (content.includes('pull_request_target')) {
+      console.error(`  ❌ Forbidden trigger: pull_request_target detected in ${file}!`);
       hasErrors = true;
     } else {
       console.log(`  ✔ No pull_request_target used`);
+    }
+
+    // 1b. Check concurrency queue for issue-commands.yml
+    if (file === 'issue-commands.yml') {
+      if (content.includes('queue: max') && content.includes('cancel-in-progress: false')) {
+        console.log(`  ✔ Concurrency queue: max with cancel-in-progress: false verified`);
+      } else {
+        console.error(`  ❌ issue-commands.yml must specify queue: max and cancel-in-progress: false!`);
+        hasErrors = true;
+      }
     }
 
     // 2. Check permissions block

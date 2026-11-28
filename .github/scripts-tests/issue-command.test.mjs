@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCommand, extractLinkedIssueNumber } from '../scripts/lib/command-parser.mjs';
-import { handleIssueComment } from '../scripts/issue-command.mjs';
+import { handleIssueComment, createGitHubClient } from '../scripts/issue-command.mjs';
 
 function createMockClient(initialState = {}) {
   const state = {
@@ -25,6 +25,9 @@ function createMockClient(initialState = {}) {
     comments: [],
     labelsAdded: [],
     labelsRemoved: [],
+    workflowDispatches: [],
+    dispatchWorkflowError: initialState.dispatchWorkflowError || null,
+    listIssuesError: initialState.listIssuesError || null,
     addAssigneesError: initialState.addAssigneesError || null,
     assigneesRaceWinner: initialState.assigneesRaceWinner || null
   };
@@ -63,6 +66,9 @@ function createMockClient(initialState = {}) {
       return state.issue;
     },
     async listOpenWocsIssuesForAssignee(username) {
+      if (state.listIssuesError) {
+        throw new Error(state.listIssuesError);
+      }
       return state.activeWocsIssues;
     },
     async getCollaboratorPermission(username) {
@@ -79,6 +85,13 @@ function createMockClient(initialState = {}) {
     async removeLabel(issueNumber, labelName) {
       state.labelsRemoved.push(labelName);
       state.pr.labels = state.pr.labels.filter(l => l.name !== labelName);
+      return null;
+    },
+    async dispatchWorkflow(workflowId, ref, inputs = {}) {
+      if (state.dispatchWorkflowError) {
+        throw new Error(state.dispatchWorkflowError);
+      }
+      state.workflowDispatches.push({ workflowId, ref, inputs });
       return null;
     }
   };
@@ -319,15 +332,66 @@ describe('Issue Command Bot Tests', () => {
     assert.match(client.state.comments[0].body, /Workbench Maintainer Bot Commands/i);
   });
 
-  test('/status returns correct status report', async () => {
-    const client = createMockClient();
-    const event = makeEvent({ body: '/status' });
+  test('/status shows available and requester eligible when requester has < 2 active issues', async () => {
+    const client = createMockClient({
+      activeWocsIssues: [{ number: 99, title: 'Existing Task' }]
+    });
+    const event = makeEvent({ body: '/status', author: 'eligibleContributor' });
     const result = await handleIssueComment({ client, event });
 
     assert.equal(result.handled, true);
     assert.equal(result.action, 'status');
-    assert.match(client.state.comments[0].body, /Issue Status & WOCS Eligibility/i);
-    assert.match(client.state.comments[0].body, /Available for claiming/i);
+    const commentBody = client.state.comments[0].body;
+    assert.match(commentBody, /Issue Status & WOCS Eligibility/i);
+    assert.match(commentBody, /Open for claiming/i);
+    assert.match(commentBody, /\*\*Eligible\*\*/i);
+    assert.match(commentBody, /1 active WOCS issue/i);
+  });
+
+  test('/status shows available but requester NOT eligible when requester has >= 2 active issues', async () => {
+    const client = createMockClient({
+      activeWocsIssues: [
+        { number: 88, title: 'Task 1' },
+        { number: 89, title: 'Task 2' }
+      ]
+    });
+    const event = makeEvent({ body: '/status', author: 'cappedContributor' });
+    const result = await handleIssueComment({ client, event });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.action, 'status');
+    const commentBody = client.state.comments[0].body;
+    assert.match(commentBody, /Open for claiming/i);
+    assert.match(commentBody, /Not eligible to claim/i);
+    assert.match(commentBody, /maximum limit: 2/i);
+  });
+
+  test('/status distinguishes issue unavailability from requester eligibility', async () => {
+    const client = createMockClient({
+      issue: { assignees: [{ login: 'otherAssignee' }] },
+      activeWocsIssues: []
+    });
+    const event = makeEvent({ body: '/status', author: 'freeContributor' });
+    const result = await handleIssueComment({ client, event });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.action, 'status');
+    const commentBody = client.state.comments[0].body;
+    assert.match(commentBody, /Already assigned to @otherAssignee/i);
+    assert.match(commentBody, /\*\*Eligible\*\*/i);
+  });
+
+  test('/status handles error during active-issue query gracefully', async () => {
+    const client = createMockClient({
+      listIssuesError: 'Rate limit exceeded'
+    });
+    const event = makeEvent({ body: '/status', author: 'rateLimitedUser' });
+    const result = await handleIssueComment({ client, event });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.action, 'status');
+    const commentBody = client.state.comments[0].body;
+    assert.match(commentBody, /Could not verify your active issue count/i);
   });
 
   test('bot comments are ignored', async () => {
@@ -444,5 +508,196 @@ describe('Maintainer PR /level Command Tests', () => {
     assert.equal(result.handled, true);
     assert.equal(result.action, 'level_author_not_assigned');
     assert.match(client.state.comments[0].body, /not an assigned contributor/i);
+  });
+
+  test('/level 2 triggers workflow dispatch for pull-request-policy.yml', async () => {
+    const client = createMockClient({
+      collaboratorPermission: 'maintain',
+      issue: {
+        number: 101,
+        assignees: [{ login: 'prAuthor' }],
+        labels: [{ name: 'wocs' }]
+      },
+      pr: {
+        number: 202,
+        body: 'Closes #101\nSome description',
+        user: { login: 'prAuthor' },
+        labels: [{ name: 'level 1' }],
+        base: { ref: 'main' }
+      }
+    });
+
+    const event = makeEvent({ body: '/level 2', author: 'maintainerAlice', isPr: true });
+    const result = await handleIssueComment({ client, event });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.action, 'level_2_applied');
+    assert.equal(client.state.workflowDispatches.length, 1);
+    assert.deepEqual(client.state.workflowDispatches[0], {
+      workflowId: 'pull-request-policy.yml',
+      ref: 'main',
+      inputs: { pr_number: 202 }
+    });
+    assert.match(client.state.comments[0].body, /Automated PR policy re-evaluation workflow has been dispatched/i);
+  });
+
+  test('/level handles workflow dispatch failure gracefully without failing label update', async () => {
+    const client = createMockClient({
+      collaboratorPermission: 'maintain',
+      dispatchWorkflowError: 'Workflow dispatch failed due to permissions',
+      issue: {
+        number: 101,
+        assignees: [{ login: 'prAuthor' }],
+        labels: [{ name: 'wocs' }]
+      },
+      pr: {
+        number: 202,
+        body: 'Closes #101\nSome description',
+        user: { login: 'prAuthor' },
+        labels: [{ name: 'level 1' }]
+      }
+    });
+
+    const event = makeEvent({ body: '/level 2', author: 'maintainerAlice', isPr: true });
+    const result = await handleIssueComment({ client, event });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.action, 'level_2_applied');
+    assert.ok(client.state.labelsAdded.includes('level 2'));
+    assert.match(client.state.comments[0].body, /please re-run the Pull Request Policy check manually/i);
+  });
+});
+
+describe('listOpenWocsIssuesForAssignee Client Method Tests', () => {
+  test('returns empty array when contributor has 0 active issues', async () => {
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => []
+    });
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    const issues = await client.listOpenWocsIssuesForAssignee('contributorZero');
+    assert.deepEqual(issues, []);
+  });
+
+  test('returns 1 active issue when contributor has 1 active issue', async () => {
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { number: 10, title: 'Issue 10', labels: [{ name: 'wocs' }] }
+      ]
+    });
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    const issues = await client.listOpenWocsIssuesForAssignee('contributorOne');
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].number, 10);
+  });
+
+  test('returns exactly 2 active issues when contributor has 2 active issues', async () => {
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { number: 10, labels: [{ name: 'wocs' }] },
+        { number: 11, labels: [{ name: 'wocs' }] }
+      ]
+    });
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    const issues = await client.listOpenWocsIssuesForAssignee('contributorTwo');
+    assert.equal(issues.length, 2);
+  });
+
+  test('returns > 2 active issues when contributor has 3 active issues', async () => {
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { number: 10, labels: [{ name: 'wocs' }] },
+        { number: 11, labels: [{ name: 'wocs' }] },
+        { number: 12, labels: [{ name: 'wocs' }] }
+      ]
+    });
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    const issues = await client.listOpenWocsIssuesForAssignee('busyUser');
+    assert.equal(issues.length, 3);
+  });
+
+  test('paginates correctly when assignee has > 100 open issues in repo', async () => {
+    const requestedPages = [];
+    const mockFetch = async (url) => {
+      const parsedUrl = new URL(url);
+      const page = parseInt(parsedUrl.searchParams.get('page'), 10);
+      requestedPages.push(page);
+
+      if (page === 1) {
+        // Return 100 issues on page 1
+        const page1Issues = Array.from({ length: 100 }, (_, i) => ({
+          number: i + 1,
+          labels: [{ name: 'wocs' }]
+        }));
+        return { ok: true, status: 200, json: async () => page1Issues };
+      } else if (page === 2) {
+        // Return 25 issues on page 2
+        const page2Issues = Array.from({ length: 25 }, (_, i) => ({
+          number: 100 + i + 1,
+          labels: [{ name: 'wocs' }]
+        }));
+        return { ok: true, status: 200, json: async () => page2Issues };
+      }
+      return { ok: true, status: 200, json: async () => [] };
+    };
+
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    const issues = await client.listOpenWocsIssuesForAssignee('prolificUser');
+    assert.deepEqual(requestedPages, [1, 2]);
+    assert.equal(issues.length, 125);
+  });
+
+  test('filters out non-WOCS issues in mixed issue lists', async () => {
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { number: 1, labels: [{ name: 'wocs' }] },
+        { number: 2, labels: [{ name: 'bug' }, { name: 'documentation' }] },
+        { number: 3, labels: ['wocs'] },
+        { number: 4, labels: [] },
+        { number: 5, labels: [{ name: 'enhancement' }] }
+      ]
+    });
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    const issues = await client.listOpenWocsIssuesForAssignee('mixedUser');
+    assert.equal(issues.length, 2);
+    assert.deepEqual(issues.map(i => i.number), [1, 3]);
+  });
+
+  test('strictly excludes pull requests from active issue count', async () => {
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { number: 10, labels: [{ name: 'wocs' }] },
+        { number: 20, pull_request: { url: 'https://api.github.com/pulls/20' }, labels: [{ name: 'wocs' }] },
+        { number: 30, pull_request: { html_url: 'https://github.com/pull/30' }, labels: [{ name: 'wocs' }] }
+      ]
+    });
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    const issues = await client.listOpenWocsIssuesForAssignee('prAuthor');
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].number, 10);
+  });
+
+  test('handles API errors during active-issue query', async () => {
+    const mockFetch = async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'Internal Server Error' })
+    });
+    const client = createGitHubClient('fake-token', 'KartikeyG-world/pycode-intelligence-workbench', mockFetch);
+    await assert.rejects(
+      async () => client.listOpenWocsIssuesForAssignee('errorUser'),
+      /Failed to query open issues/
+    );
   });
 });

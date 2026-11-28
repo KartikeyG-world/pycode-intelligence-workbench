@@ -140,10 +140,24 @@ export function helpResponse() {
 
 /**
  * B7. Status command response.
+ * Distinguishes issue eligibility, ownership, and requester-specific claim eligibility.
+ *
  * @param {object} status - Status details object
  * @returns {string} Markdown formatted comment body
  */
-export function statusResponse({ state, locked, assignees, isWocs, difficultyLevels, canClaim, claimBlockReason }) {
+export function statusResponse({
+  state,
+  locked,
+  assignees,
+  isWocs,
+  difficultyLevels,
+  canClaim,
+  claimBlockReason,
+  requester,
+  requesterActiveCount = 0,
+  requesterEligible = true,
+  requesterBlockReason = ''
+}) {
   const assigneeStr = assignees && assignees.length > 0 
     ? assignees.map(a => `@${a}`).join(', ') 
     : '_None (Unassigned)_';
@@ -153,9 +167,18 @@ export function statusResponse({ state, locked, assignees, isWocs, difficultyLev
     ? `✅ \`${difficultyLevels[0]}\`` 
     : (difficultyLevels.length === 0 ? '❌ None' : `⚠️ Multiple (\`${difficultyLevels.join(', ')}\`)`);
 
-  const availabilityStr = canClaim 
-    ? '✅ **Available for claiming** (\`/claim\` or \`/assign\`)' 
-    : `❌ **Not available for claiming** (${claimBlockReason || 'Requirements not met'})`;
+  const issueAvailabilityStr = canClaim 
+    ? '✅ **Open for claiming** (\`/claim\` or \`/assign\`)' 
+    : `❌ **Not claimable** (${claimBlockReason || 'Requirements not met'})`;
+
+  let requesterStr = '';
+  if (requester) {
+    if (requesterEligible) {
+      requesterStr = `\n- **Your Claim Eligibility (@${requester}):** ✅ **Eligible** (${requesterActiveCount} active WOCS issue${requesterActiveCount === 1 ? '' : 's'} assigned, max 2 allowed)`;
+    } else {
+      requesterStr = `\n- **Your Claim Eligibility (@${requester}):** ⚠️ **Not eligible to claim** (${requesterBlockReason || `${requesterActiveCount} active WOCS issues assigned; maximum limit is 2`})`;
+    }
+  }
 
   return `### 📊 Issue Status & WOCS Eligibility
 
@@ -163,19 +186,27 @@ export function statusResponse({ state, locked, assignees, isWocs, difficultyLev
 - **Current Assignee(s):** ${assigneeStr}
 - **WOCS Label:** ${wocsBadge}
 - **Difficulty Level:** ${levelsBadge}
-- **Assignment Availability:** ${availabilityStr}`;
+- **Issue Availability:** ${issueAvailabilityStr}${requesterStr}`;
 }
 
 /**
- * Module C. Level assignment success response.
+ * Module C. Level assignment success response with re-evaluation note.
  * @param {string} maintainer - Maintainer login
  * @param {string} level - Level applied (e.g., '1', '2', '3')
+ * @param {string} [reevalStatus='initiated'] - Status of policy re-evaluation
  * @returns {string} Markdown formatted comment body
  */
-export function levelSuccess(maintainer, level) {
+export function levelSuccess(maintainer, level, reevalStatus = 'initiated') {
+  let reevalNote = '';
+  if (reevalStatus === 'initiated') {
+    reevalNote = '\n\n🔄 **Policy Re-Evaluation:** Automated PR policy re-evaluation workflow has been dispatched.';
+  } else if (reevalStatus === 'manual') {
+    reevalNote = '\n\n⚠️ **Policy Re-Evaluation:** Automated re-evaluation could not be dispatched. Please re-run the Pull Request Policy check manually.';
+  }
+
   return `✅ WOCS difficulty level successfully set to **level ${level}** by @${maintainer}.
 
-Labels updated: \`wocs\`, \`level ${level}\`.`;
+Labels updated: \`wocs\`, \`level ${level}\`.${reevalNote}`;
 }
 
 /**

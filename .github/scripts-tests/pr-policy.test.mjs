@@ -67,6 +67,7 @@ function makePr(overrides = {}) {
   return {
     base: { ref: 'main' },
     draft: false,
+    author_association: 'CONTRIBUTOR',
     user: { login: 'contributorA' },
     body: makeValidPrBody(),
     ...overrides
@@ -149,7 +150,7 @@ describe('Pull Request Policy Tests', () => {
     assert.match(result.warnings[0], /draft/i);
   });
 
-  test('missing linked issue reference fails', () => {
+  test('missing linked issue reference fails for ordinary contributor', () => {
     const pr = makePr({ body: makeValidPrBody({ linkedIssue: null }) });
     const result = validatePullRequestPolicy({
       pr,
@@ -303,5 +304,142 @@ describe('Pull Request Policy Tests', () => {
 
     assert.equal(result.valid, false);
     assert.match(result.errors.join(' '), /Verification Commands & Environment section is empty/i);
+  });
+});
+
+describe('Owner-Authored Maintenance Exemption Tests (Section 5)', () => {
+  // 1. OWNER-authored maintenance PR without linked issue
+  test('1. OWNER-authored maintenance PR without linked issue passes with warnings', () => {
+    const pr = makePr({
+      author_association: 'OWNER',
+      user: { login: 'repoOwner' },
+      body: makeValidPrBody({ linkedIssue: null, assignmentConfirmed: false })
+    });
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: null,
+      prLabels: []
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.warnings.some(w => w.includes('linked issue reference is exempt')));
+    assert.ok(result.warnings.some(w => w.includes('assignment confirmation checkbox is exempt')));
+  });
+
+  // 2. OWNER-authored PR with a linked non-WOCS issue
+  test('2. OWNER-authored PR with a linked non-WOCS issue passes without requiring WOCS assignment', () => {
+    const pr = makePr({
+      author_association: 'OWNER',
+      user: { login: 'repoOwner' },
+      body: makeValidPrBody({ linkedIssue: '50', assignmentConfirmed: false })
+    });
+    const nonWocsIssue = {
+      number: 50,
+      state: 'open',
+      pull_request: null,
+      assignees: [], // unassigned
+      labels: [{ name: 'internal' }]
+    };
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: nonWocsIssue,
+      prLabels: []
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.warnings.some(w => w.includes('issue assignment requirement on #50 is exempt')));
+  });
+
+  // 3. OWNER-authored WOCS PR strictly enforces all WOCS requirements
+  test('3. OWNER-authored WOCS PR strictly enforces linked issue assignment and WOCS labels', () => {
+    const pr = makePr({
+      author_association: 'OWNER',
+      user: { login: 'repoOwner' },
+      body: makeValidPrBody({ linkedIssue: '101', assignmentConfirmed: false })
+    });
+    const wocsIssue = makeIssue({ assignees: [{ login: 'anotherPerson' }] }); // assigned to someone else
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: wocsIssue,
+      prLabels: ['wocs'] // missing level label
+    });
+
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('assigned to @anotherPerson, not PR author @repoOwner')));
+    assert.ok(result.errors.some(e => e.includes('Issue Assignment Confirmation checkbox is not checked')));
+    assert.ok(result.errors.some(e => e.includes('missing a difficulty level label')));
+  });
+
+  // 4. Ordinary contributor without linked issue is strictly rejected
+  test('4. Ordinary contributor without linked issue is strictly rejected', () => {
+    const pr = makePr({
+      author_association: 'CONTRIBUTOR',
+      user: { login: 'randomContributor' },
+      body: makeValidPrBody({ linkedIssue: null })
+    });
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: null,
+      prLabels: []
+    });
+
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('No linked issue reference found in PR description')));
+  });
+
+  // 5. Ordinary contributor without assignment confirmation is strictly rejected
+  test('5. Ordinary contributor without assignment confirmation is strictly rejected', () => {
+    const pr = makePr({
+      author_association: 'CONTRIBUTOR',
+      user: { login: 'contributorA' },
+      body: makeValidPrBody({ linkedIssue: '101', assignmentConfirmed: false })
+    });
+    const issue = makeIssue();
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('Issue Assignment Confirmation checkbox is not checked')));
+  });
+
+  // 6. Collaborator attempting to use the owner exemption is rejected
+  test('6. Collaborator attempting to use the owner exemption is rejected', () => {
+    const pr = makePr({
+      author_association: 'COLLABORATOR',
+      user: { login: 'trustedCollaborator' },
+      body: makeValidPrBody({ linkedIssue: null, assignmentConfirmed: false })
+    });
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: null,
+      prLabels: []
+    });
+
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('No linked issue reference found in PR description')));
+    assert.ok(result.errors.some(e => e.includes('Issue Assignment Confirmation checkbox is not checked')));
+  });
+
+  // 7. Correctly assigned external WOCS contribution passes all checks
+  test('7. Correctly assigned external WOCS contribution passes all checks cleanly', () => {
+    const pr = makePr({
+      author_association: 'FIRST_TIME_CONTRIBUTOR',
+      user: { login: 'studentContributor' },
+      body: makeValidPrBody({ linkedIssue: '101', assignmentConfirmed: true })
+    });
+    const issue = makeIssue({ assignees: [{ login: 'studentContributor' }] });
+    const result = validatePullRequestPolicy({
+      pr,
+      linkedIssue: issue,
+      prLabels: ['wocs', 'level 2']
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.errors, []);
   });
 });

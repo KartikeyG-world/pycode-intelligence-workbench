@@ -38,11 +38,11 @@ The automation system is constructed exclusively from native GitHub Actions, the
 
 | Workflow | File | Trigger Event | Primary Purpose | Permissions |
 |---|---|---|---|---|
-| **Issue Intake** | `.github/workflows/issue-intake.yml` | `issues: [opened]` | Post welcoming comment with assignment & WOCS policies | `issues: write` |
-| **Issue Commands** | `.github/workflows/issue-commands.yml` | `issue_comment: [created]` | Process `/claim`, `/assign`, `/unclaim`, `/status`, `/help`, and maintainer `/level` | `issues: write`, `pull-requests: write` |
+| **Issue Intake** | `.github/workflows/issue-intake.yml` | `issues: [opened]` | Post welcoming comment with assignment & WOCS policies | `issues: write`, `contents: read` |
+| **Issue Commands** | `.github/workflows/issue-commands.yml` | `issue_comment: [created]` | Process `/claim`, `/assign`, `/unclaim`, `/status`, `/help`, and maintainer `/level` | `issues: write`, `pull-requests: write`, `contents: read`, `actions: write` |
 | **Pull Request CI** | `.github/workflows/pull-request-ci.yml` | `pull_request: [opened, synchronize, reopened, ready_for_review]` | Run backend test matrices (Python 3.11, 3.13) & frontend checks (lint, tsc, build) | `contents: read` |
-| **Pull Request Policy** | `.github/workflows/pull-request-policy.yml` | `pull_request: [opened, synchronize, reopened, edited, ready_for_review]` | Enforce branch target, issue linkage, assignment, AI disclosure, and WOCS labels | `contents: read`, `pull-requests: read`, `issues: read` |
-| **Pull Request Summary** | `.github/workflows/pull-request-summary.yml` | `workflow_run: [completed]` on PR CI | Post/update a single consolidated CI summary comment on the pull request | `pull-requests: write`, `issues: write`, `actions: read` |
+| **Pull Request Policy** | `.github/workflows/pull-request-policy.yml` | `pull_request_target: [opened, synchronize, reopened, edited, ready_for_review]`, `workflow_dispatch: [pr_number]` | Enforce branch target, issue linkage, assignment, AI disclosure, and WOCS labels from trusted base ref | `contents: read`, `pull-requests: read`, `issues: read`, `statuses: write` |
+| **Pull Request Summary** | `.github/workflows/pull-request-summary.yml` | `workflow_run: [completed]` on PR CI | Post/update a single consolidated CI summary comment on the pull request with hardened job validation | `pull-requests: write`, `issues: write`, `actions: read`, `contents: read` |
 
 ---
 
@@ -61,7 +61,8 @@ Commands are parsed with strict token-level matching. Commands embedded in ordin
   4. The issue has no current assignee.
   5. The requesting contributor does not already hold **more than two active assigned WOCS issues** in this repository.
   6. The user is assignable via GitHub API.
-- **Single-Contributor Concurrency Guarantee:** Uses a per-issue GitHub Actions concurrency group (`cancel-in-progress: false`). The latest issue state is fetched before assignment, the assignment API call is executed, and the updated issue state is re-fetched and verified. If another contributor won a race condition while the workflow was queued, the second claim is politely rejected without overwriting the assignment.
+- **Single-Contributor Concurrency Guarantee:** Uses a per-issue GitHub Actions concurrency group with `queue: max` and `cancel-in-progress: false`. This configures GitHub Actions' FIFO run queue (retaining up to 100 queued assignment requests without dropping intermediate requests). The latest issue state is re-fetched before assignment, the assignment API call is executed, and the updated issue state is re-fetched and verified. If another contributor won an assignment race while a request was queued, the second claim is politely rejected without overwriting the assignment.
+- **Paginated Active Issue Limit Check:** Queries the GitHub REST API across all pages (100 items per page) to count active open WOCS issues assigned to the requester, strictly excluding pull requests and non-WOCS tasks.
 
 #### `/unclaim`
 - **Action:** Releases the assignment of the currently assigned contributor.
@@ -71,7 +72,8 @@ Commands are parsed with strict token-level matching. Commands embedded in ordin
   - Re-fetches state before and after unassignment to confirm completion.
 
 #### `/status`
-- **Action:** Reports issue state, lock status, current assignee, WOCS label presence, difficulty level, and whether the issue is available for claiming (with reasons if blocked).
+- **Action:** Reports issue state, lock status, current assignee, WOCS label presence, difficulty level, and whether the issue is open for claiming (with reasons if blocked).
+- **Requester Eligibility Reporting:** Separately reports the requester's personal claim eligibility under the 2-active-WOCS-issue limit, clearly distinguishing issue availability from personal quota status.
 
 #### `/help`
 - **Action:** Displays command usage instructions and policy reminders.
@@ -86,7 +88,8 @@ Commands are parsed with strict token-level matching. Commands embedded in ordin
   2. Verifies the linked issue has `wocs` and is assigned to the PR author.
   3. Adds the exact `wocs` label and `level <X>` to the PR.
   4. Removes conflicting difficulty labels (`level 1`, `level 2`, or `level 3` if different).
-  5. Publishes a confirmation comment.
+  5. **Automated Policy Re-Evaluation:** Triggers a `workflow_dispatch` of `pull-request-policy.yml` targeting the PR number so the policy check is automatically re-evaluated without requiring an empty commit or manual workflow re-run.
+  6. Publishes a confirmation comment indicating label update and policy dispatch status.
 
 ---
 
@@ -105,20 +108,28 @@ The `Pull Request Policy` workflow (`.github/workflows/pull-request-policy.yml`)
 7. **Technical Description:** Non-empty `Problem Addressed` and `Summary of Changes` sections (placeholder comments stripped).
 8. **Verification Evidence:** Non-empty `Verification Commands & Environment` code block.
 9. **WOCS Labels:** For PRs linked to WOCS issues, the PR must have `wocs` and exactly one of `level 1`, `level 2`, or `level 3`. If missing, an actionable check failure directs maintainers to comment `/level <1|2|3>`.
+10. **Owner-Authored Maintenance Exemption:** A narrow, deliberate exception exists exclusively for the repository owner (`author_association === 'OWNER'`) when submitting non-WOCS administrative or infrastructure maintenance PRs. Under this exemption:
+    - Target branch (`main`), AI disclosure, technical description, and verification sections remain strictly enforced.
+    - Linked issue reference and contributor assignment confirmation checkboxes are waived with informative workflow annotations.
+    - Full policy enforcement remains strictly non-negotiable for all external contributors, collaborators, and any WOCS-labeled pull request.
 
 ---
 
 ## 4. Security Model & Invariants
 
 1. **Token Principle:** All workflows use the short-lived, repository-scoped `GITHUB_TOKEN` secret. No personal access tokens (PATs) or long-lived credentials are used.
-2. **Read-Only Fork PRs:** Pull request CI and policy checks run under the safe `pull_request` event. Fork PRs receive a read-only token with zero repository secrets exposed.
-3. **No `pull_request_target`:** The vulnerable `pull_request_target` trigger is deliberately omitted to prevent script injection and untrusted code execution in privileged contexts.
+2. **Read-Only Fork PRs:** Pull request CI runs under the safe `pull_request` event. Fork PRs receive a read-only token with zero repository secrets exposed.
+3. **Hardened Policy Execution (`pull_request_target`):** The `Pull Request Policy` workflow runs under `pull_request_target` to ensure policy definitions and verification scripts execute exclusively from the trusted base branch (`ref: ${{ github.base_ref || github.event.repository.default_branch }}`). Security invariants:
+   - Untrusted PR head code is **never** checked out.
+   - Contributor-controlled scripts, packages, or binaries are never executed.
+   - PR metadata is ingested strictly via trusted GitHub API endpoints.
+   - The workflow uses explicit least-privilege permissions (`contents: read`, `pull-requests: read`, `issues: read`, `statuses: write`).
 4. **Privileged Summary Isolation:** The automated summary comment workflow uses `workflow_run` (which runs in the default branch context). It:
    - Does not check out PR code.
    - Does not run PR scripts or commands.
    - Does not download or execute untrusted workflow artifacts.
-   - Relies strictly on trusted GitHub API metadata.
-5. **Action Pinning:** All external GitHub Actions are pinned to full-length, immutable commit SHAs with semantic tag comments (e.g., `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2`).
+   - Relies strictly on trusted GitHub API metadata and hardened job conclusion verification.
+5. **Action Pinning & Node 24 Runtime:** All external GitHub Actions are pinned to full-length 40-character commit SHAs with semantic tag comments. Actions are upgraded to Node 24-compatible releases (`actions/checkout@v7.0.1`, `actions/setup-node@v7.1.0`, `actions/setup-python@v7.1.0`, `astral-sh/setup-uv@v10.4.0`) ahead of GitHub's scheduled Node 20 runner deprecation.
 6. **No Shell Code Interpolation:** Untrusted comment text and issue bodies are never interpolated into shell scripts (`run: ... ${{ github.event... }}`). All dynamic payloads are accessed via Node.js parsing `process.env.GITHUB_EVENT_PATH`.
 
 ---
@@ -159,3 +170,23 @@ Navigate to **Settings > Branches** (or **Rulesets > New ruleset**) for `main`:
 4. **Evaluate Difficulty:** Inspect the actual complexity and scope of the contribution.
 5. **Apply Level:** Comment `/level 1`, `/level 2`, or `/level 3` on the PR. The bot will apply labels and resolve the policy gate.
 6. **Merge:** Merge the pull request using GitHub's merge interface (Squash and Merge recommended for atomic feature history).
+
+---
+
+## 7. Frontend Dependency Security Audit & Maintenance Pathway
+
+A security audit of the repository's frontend dependencies (`frontend/package.json`) identified 13 known vulnerabilities (2 low, 7 moderate, 3 high, 1 critical):
+
+| Package | Severity | Issue / Advisory | Direct vs Transitive | Root Cause & Context |
+|---|---|---|---|---|
+| `next` (`16.3.6`) | Critical / High | CVE-2024-34351, GHSA-fr5h-rqp8-gw9v (SSRF in Image Optimization, RCE in Image Optimization / SVG, cache poisoning) | Direct | Pinned Next.js version in `package.json` |
+| `dompurify` | Moderate | Nested DOM clobbering | Transitive | Introduced via `@xyflow/react` |
+| `minimatch` | High | ReDoS in path globbing | Transitive | Introduced via `eslint` / `glob` |
+| `sharp` | Moderate | Memory exhaustion on malformed buffers | Transitive | Introduced via Next.js image optimization |
+| `source-map-js` | Moderate | Prototype pollution in parser | Transitive | Introduced via `postcss` / `tailwindcss` |
+| `zod` | Low | ReDoS in regex schema validation | Transitive | Internal Next.js dependency |
+
+### Remediation Guidance & Boundary
+- **Separation of Concerns:** Remediating application dependencies is decoupled from maintainer workflow automation to prevent regression in production bundle semantics.
+- **Recommended Action:** Upgrade Next.js to `>= 16.4.5` (or latest stable) and run `npm audit fix` in a dedicated, isolated pull request following PR #29 merge.
+- **Verification:** Any future dependency bump must run `npm run lint`, `npx tsc --noEmit`, and `npm run build` across all 4 viewports.

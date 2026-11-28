@@ -64,7 +64,7 @@ Example:
 
 ## Maintainer Review & WOCS Scoring Checklist (Maintainer Use Only)
 
-> **Maintainer Tip:** Authorized maintainers and mentors can apply the verified WOCS difficulty level by commenting `/level 1`, `/level 2`, or `/level 3` directly on this pull request. The automation bot will apply the exact labels and resolve policy checks.
+> **Maintainer Tip:** Authorized maintainers and mentors can apply the verified WOCS difficulty level by commenting `/level 1`, `/level 2`, or `/level 3` directly on this pull request. The automation bot will apply the exact labels and automatically dispatch policy re-evaluation.
 
 - [ ] **Issue Assignment:** Verified that the contributor was assigned to the linked issue prior to PR submission.
 - [ ] **Technical Correctness:** Verifies AST immutability, deterministic complexity modeling, and contract compliance.

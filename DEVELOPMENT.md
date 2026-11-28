@@ -82,6 +82,48 @@ Useful endpoints:
 
 The health route performs a database connectivity query. A healthy application process does not by itself establish that every analysis endpoint has been exercised successfully.
 
+### PostgreSQL schema migration
+
+When `DATABASE_URL` points to PostgreSQL, apply the Alembic migrations **before starting the FastAPI application**. The migration command is an explicit setup/deployment step; application startup does not run Alembic migrations.
+
+From the `backend/` directory, make sure `.env` contains a SQLAlchemy URL using the configured Psycopg 3 driver. For example:
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://USER:ENCODED_PASSWORD@HOST:5432/DATABASE
+```
+
+Use your actual database host, name, user, and URL-encoded password. Keep `.env` and credentials out of version control. The backend settings load `.env` relative to the process working directory, so run Alembic from `backend/`.
+
+Apply the existing initial schema migration:
+
+```powershell
+uv run alembic upgrade head
+uv run alembic current
+```
+
+The current initial revision is `c79742664bb5`. For a fresh database, the migration creates the `users`, `projects`, `code_submissions`, and `analysis_results` tables, plus Alembic's `alembic_version` tracking table.
+
+To verify the database directly, connect with your PostgreSQL client and run:
+
+```sql
+SELECT version_num FROM alembic_version;
+
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_name IN (
+    'users',
+    'projects',
+    'code_submissions',
+    'analysis_results'
+  )
+ORDER BY table_name;
+```
+
+The version query should return `c79742664bb5`, and the table query should return all four application tables. Run this verification against a newly created, empty database to confirm the initial migration path. Do not run the initial migration against a database that already contains these tables unless its schema and Alembic revision state have first been reviewed.
+
+The FastAPI startup lifecycle continues to perform a connectivity check only for PostgreSQL. The existing SQLite development path remains unchanged: when the configured URL uses SQLite, startup creates tables through SQLAlchemy `Base.metadata.create_all()`. Do not treat that SQLite convenience behavior as a substitute for PostgreSQL migrations.
+
 ## 5. Frontend setup
 
 From the repository root:

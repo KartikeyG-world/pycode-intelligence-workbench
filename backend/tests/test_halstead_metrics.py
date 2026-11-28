@@ -17,12 +17,17 @@ Verifies conformance to Stage 0.7 specification and Stage 1.0.2 architecture:
 import ast
 import copy
 import math
+import sys
 import pytest
 from pydantic import ValidationError
 
 from app.analyzers.scope_discovery import discover_scopes, ScopeDefinition
 from app.analyzers.halstead_analyzer import HalsteadAnalyzer
 from app.schemas.metrics import ScopeHalsteadMetrics, UnclassifiedSyntaxRecord
+
+_requires_pep695 = pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="PEP 695 syntax requires Python 3.12+"
+)
 
 
 def get_scope_by_id(scopes, scope_id: str) -> ScopeDefinition:
@@ -169,6 +174,7 @@ class TestStage07HalsteadAcceptanceMatrix:
         assert m.operator_inventory == {"op:return": 1}
         assert m.operand_inventory == {"id:a": 2}
 
+    @_requires_pep695
     def test_case_06_generic_type_alias(self, analyzer):
         """Case 6: Type alias ('type Vector[T] = list[T]')."""
         code = "type Vector[T] = list[T]"
@@ -192,6 +198,7 @@ class TestStage07HalsteadAcceptanceMatrix:
         assert m.operator_inventory == {"op:type_alias": 1}
         assert m.operand_inventory == {"id:Vector": 1}
 
+    @_requires_pep695
     def test_case_07_generic_function(self, analyzer):
         """Case 7: Generic function ('def convert[T](value: T) -> T:\n    return value')."""
         code = "def convert[T](value: T) -> T:\n    return value"
@@ -215,6 +222,7 @@ class TestStage07HalsteadAcceptanceMatrix:
         assert m.operator_inventory == {"op:return": 1}
         assert m.operand_inventory == {"id:value": 2}
 
+    @_requires_pep695
     def test_case_08_generic_method(self, analyzer):
         """Case 8: Generic method ('Container.get@2')."""
         code = "class Container[T]:\n    def get(self, value: T) -> T:\n        return value"
@@ -478,6 +486,7 @@ else:
 # Group 2: Mandatory Generic Class Ownership Fixture (Container[T])
 # ==============================================================================
 
+@_requires_pep695
 class TestGenericClassHalsteadOwnership:
     """Verifies Container[T] Halstead inventories across all 3 scopes."""
 
@@ -715,6 +724,7 @@ class TestTripartiteSyntaxCoverage:
         assert m.difficulty is not None
         assert m.effort is not None
 
+    @_requires_pep695
     def test_case_02_full_generic_function_with_excluded_annotations(self):
         """Fully classified generic function with intentionally excluded annotations produces FULL."""
         code = """def identity[T](value: T) -> T:
@@ -946,6 +956,7 @@ class TestTripartiteSyntaxCoverage:
 class TestImmutabilityAndSafety:
     """Verifies that the original AST is not mutated and results are deterministic."""
 
+    @_requires_pep695
     def test_ast_immutability(self):
         code = """class Foo[T]:
     @dec(k=1)

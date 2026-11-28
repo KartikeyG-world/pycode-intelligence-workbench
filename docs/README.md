@@ -8,9 +8,10 @@ This directory contains version-controlled technical documentation. It is mainta
 - [Phase 1B metrics: contracts and integration status](architecture/phase-1b-metrics.md)
 - [Phase 1C frontend metrics integration](architecture/phase-1c-frontend-integration.md)
 
-## Development
+## Development & Automation
 
 - [Test strategy and verification evidence](development/testing.md)
+- [Maintainer Automation & Governance Guide](automation/MAINTAINER_AUTOMATION.md)
 
 ## API
 

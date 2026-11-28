@@ -25,6 +25,10 @@ from app.analyzers.structural_analyzer import (
 )
 from app.schemas.metrics import ScopeStructuralMetrics
 
+_requires_pep695 = pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="PEP 695 syntax requires Python 3.12+"
+)
+
 
 # ==============================================================================
 # Helper functions
@@ -129,6 +133,7 @@ class TestStage07AcceptanceMatrix:
         assert metrics.return_count == 1
         assert metrics.diagnostics == []
 
+    @_requires_pep695
     def test_case_06_generic_type_alias(self, analyzer):
         """Case 6: Type alias ('type Vector[T] = list[T]')."""
         code = "type Vector[T] = list[T]"
@@ -146,6 +151,7 @@ class TestStage07AcceptanceMatrix:
         assert metrics.return_count is None
         assert metrics.diagnostics == []
 
+    @_requires_pep695
     def test_case_07_generic_function(self, analyzer):
         """Case 7: Generic function ('def convert[T](value: T) -> T:\n    return value')."""
         code = "def convert[T](value: T) -> T:\n    return value"
@@ -163,6 +169,7 @@ class TestStage07AcceptanceMatrix:
         assert metrics.return_count == 1
         assert metrics.diagnostics == []
 
+    @_requires_pep695
     def test_case_08_generic_method(self, analyzer):
         """Case 8: Generic method ('Container.get@2')."""
         code = "class Container[T]:\n    def get(self, value: T) -> T:\n        return value"
@@ -365,6 +372,7 @@ else:
 # Group 2: Mandatory Generic Class Ownership Fixture (Section 6.4)
 # ==============================================================================
 
+@_requires_pep695
 class TestGenericClassOwnershipFixture:
     """Validates the exact scope ownership of Container[T] across all 3 scopes."""
 
@@ -610,6 +618,7 @@ class TestControlNestingAndSyntaxMetrics:
 class TestImmutabilityAndSafety:
     """Verifies that the AST is never mutated and traversal does not fail on deep trees."""
 
+    @_requires_pep695
     def test_ast_immutability(self):
         code = """class Foo[T]:
     @decorator

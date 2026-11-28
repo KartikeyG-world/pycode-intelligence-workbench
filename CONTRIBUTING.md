@@ -13,12 +13,35 @@ Thank you for considering a contribution to the Python Code Intelligence & Perfo
 
 This repository participates in **[Winter of Code Social (WOCS) 2026](https://woc.codesocial.tech/)**, an open-source mentorship initiative organised by Code Social. All WOCS participants must follow these specific procedures:
 
+### Automated Issue Assignment Bot & Commands
+
+To streamline contributor onboarding while preserving fair access to tasks, this repository operates an automated maintainer bot for issue assignment and governance:
+
+| Command | Allowed On | Description |
+|---|---|---|
+| `/claim` | Issue Comments | Request assignment for an unassigned, open WOCS issue. |
+| `/assign` | Issue Comments | Exact alias for `/claim`. |
+| `/unclaim` | Issue Comments | Release your current assignment on the issue so others may claim it. |
+| `/status` | Issue Comments | Display the current assignee, WOCS eligibility, and claim availability. |
+| `/help` | Issue / PR Comments | Display the full list of available automation commands. |
+
+#### Assignment Rules & Policies
+1. **Single-Contributor Assignment Guarantee:** Every issue is assigned to **at most one** contributor. Concurrent claim requests are serialized via repository-wide concurrency; once a contributor is confirmed as the assignee, further claim requests are politely rejected.
+2. **Two Active WOCS Issues Limit:** To prevent task hoarding and ensure fair distribution, contributors may have at most **two active WOCS issues** assigned simultaneously across the repository. If you currently hold two assigned open WOCS issues, your `/claim` command will be rejected until you complete or `/unclaim` one of them.
+3. **WOCS Eligibility Pre-Conditions:** An issue can only be claimed via `/claim` or `/assign` if:
+   - The issue is currently **open** and **unlocked**.
+   - The issue has the exact `wocs` label.
+   - The issue has **exactly one** approved difficulty level label (`level 1`, `level 2`, or `level 3`).
+   - The issue has no current assignee.
+4. **Wait for Formal Confirmation:** **Do not start coding before assignment confirmation.** You are not authorized to begin work until the automation bot replies with a confirmation comment confirming that your issue claim has been approved. Pull requests submitted without an active assignment will not be reviewed.
+5. **Releasing an Issue (`/unclaim`):** If you are unable to complete an assigned issue within a reasonable timeframe, comment `/unclaim` on the issue to release it for other contributors. Only the currently assigned contributor or a repository maintainer can release an assignment.
+
 ### Issue Claiming and Assignment
 - **Inspect discussions:** Review the open issue and any existing comments before requesting assignment.
-- **Request assignment:** Comment on the issue stating your interest and briefly describing your proposed technical approach or reproduction plan.
-- **Wait for maintainer confirmation:** **Do not begin implementation before an issue is formally assigned.** Work must not start until a Project Admin or Mentor explicitly assigns the issue to you on GitHub. Pull requests opened without an assigned issue will be closed.
-- **Issue limits:** Avoid claiming or holding multiple incomplete issues. Work on only one or two issues at a time in accordance with WOCS guidelines.
-- **Releasing issues:** If you are unable to complete an assigned issue, comment promptly on the issue to request unassignment so that others may take it up.
+- **Request assignment:** Comment on the issue with `/claim` or `/assign`, accompanied by a brief outline of your proposed technical approach or reproduction plan.
+- **Wait for confirmation:** Wait for the bot's confirmation comment and GitHub's assignee list to reflect your assignment before creating your branch.
+- **Issue limits:** Strictly observe the maximum limit of two active WOCS issues.
+- **Releasing issues:** Use `/unclaim` promptly if you encounter blockers or cannot finish the task.
 
 ### Git and Branching Workflow
 - **Do not work directly on `main`.**
